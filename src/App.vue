@@ -431,10 +431,10 @@ onUnmounted(() => {
       style="display: none"
     />
     <button class="file-button" @click="triggerFileSelect">
-      选择 PLY 文件
+      随便扔点什么到这个奇怪的水晶球里🤔
     </button>
     <button class="reset-button" @click="resetView()">
-      恢复默认视角
+      不忘初心
     </button>
   </div>
 </template>
