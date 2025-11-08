@@ -433,7 +433,7 @@ onUnmounted(() => {
     <button class="file-button" @click="triggerFileSelect">
       选择 PLY 文件
     </button>
-    <button class="reset-button" @click="resetView">
+    <button class="reset-button" @click="resetView()">
       恢复默认视角
     </button>
   </div>
