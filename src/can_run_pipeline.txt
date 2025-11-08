@@ -1,0 +1,32 @@
+
+echo "========== [6/6] 训练 splatfacto 并导出 .splat =========="
+ns-train splatfacto \
+  --data "$ROOT" \
+  --vis tensorboard \
+  --max-num-iterations "$MAX_ITERS" \
+  --experiment-name "$SCENE"
+
+RUN_DIR=$(ls -td "outputs/nerfstudio/splatfacto/$SCENE"/*/ 2>/dev/null | head -n1)
+[[ -n "${RUN_DIR:-}" && -f "$RUN_DIR/config.yml" ]] || { echo "未找到训练输出或 config.yml"; exit 1; }
+
+ns-export gaussian-splat \
+  --load-config "$RUN_DIR/config.yml" \
+  --output-dir "$OUT_SPLAT"
+
+# 统一命名
+if ls "$OUT_SPLAT"/*.splat >/dev/null 2>&1; then
+  SPLAT_FILE="$(ls "$OUT_SPLAT"/*.splat | head -n1)"
+  cp -f "$SPLAT_FILE" "$OUT_SPLAT/scene.splat"
+fi
+
+echo
+echo "✅ 全流程完成"
+echo "   场景名:     $SCENE"
+echo "   数据根:     $ROOT"
+echo "   训练目录:   $RUN_DIR"
+echo "   导出目录:   $OUT_SPLAT"
+ls -lh "$OUT_SPLAT" || true
+
+
+
+

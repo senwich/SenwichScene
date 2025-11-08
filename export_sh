@@ -1,0 +1,10 @@
+# 只做导出
+CONFIG="outputs/video_nailong/splatfacto/2025-11-07_003057/config.yml"
+OUT="$HOME/datasets/video_nailong/nerfstudio/export_splat"
+mkdir -p "$OUT"
+
+ns-export gaussian-splat \
+  --load-config "$CONFIG" \
+  --output-dir "$OUT"
+
+ls -lh "$OUT"
