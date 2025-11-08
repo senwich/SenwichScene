@@ -434,7 +434,7 @@ onUnmounted(() => {
       随便扔点什么到这个奇怪的水晶球里🤔
     </button>
     <button class="reset-button" @click="resetView()">
-      不忘初心
+      made by 生橙式😋
     </button>
   </div>
 </template>
@@ -449,6 +449,7 @@ onUnmounted(() => {
   cursor: grab;
   user-select: none;
   position: relative;
+  background-color: #000;
 }
 
 .container:active {
