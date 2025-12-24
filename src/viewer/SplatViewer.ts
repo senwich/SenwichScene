@@ -47,8 +47,14 @@ export class SplatViewer {
     isDragging: false,
     lastX: 0,
     lastY: 0,
+    lastTime: 0,
     axisLock: null as AxisLock,
   };
+
+  // Inertia state: angular velocity (rad/frame at 60fps baseline)
+  private velocityTheta = 0;
+  private velocityPhi = 0;
+  private isSpinning = false;
 
   private readonly pointerNdc = new THREE.Vector2();
   private readonly raycaster = new THREE.Raycaster();
@@ -176,6 +182,11 @@ export class SplatViewer {
   resetView(immediate = false) {
     this.pointerState.isDragging = false;
     this.pointerState.axisLock = null;
+    // Stop inertia
+    this.isSpinning = false;
+    this.velocityTheta = 0;
+    this.velocityPhi = 0;
+
     this.orbitTarget.copy(this.defaultTarget);
     this.sphericalGoal.copy(this.defaultSpherical);
     if (immediate) {
@@ -361,8 +372,22 @@ export class SplatViewer {
   }
 
   private renderLoop = () => {
+    // Apply inertia velocity (constant angular velocity, no friction)
+    if (this.isSpinning && !this.pointerState.isDragging) {
+      this.sphericalGoal.theta += this.velocityTheta;
+      this.sphericalGoal.phi += this.velocityPhi;
+      // Clamp phi to prevent flipping
+      this.sphericalGoal.phi = THREE.MathUtils.clamp(
+        this.sphericalGoal.phi,
+        this.minPolarAngle,
+        this.maxPolarAngle
+      );
+    }
+
     const cameraChanged = this.updateCamera();
-    if (this.needsRender || cameraChanged) {
+    const spinning = this.isSpinning && !this.pointerState.isDragging;
+
+    if (this.needsRender || cameraChanged || spinning) {
       this.renderer.clear();
       for (const view of this.views) {
         this.renderView(view);
@@ -370,7 +395,7 @@ export class SplatViewer {
       this.needsRender = false;
     }
 
-    if (!cameraChanged && !this.needsRender) {
+    if (!cameraChanged && !this.needsRender && !spinning) {
       this.renderer.setAnimationLoop(null);
       this.renderLoopActive = false;
     }
@@ -390,9 +415,15 @@ export class SplatViewer {
 
   private handlePointerDown = (event: PointerEvent) => {
     if (!this.viewport) return;
+    // Stop any existing inertia spin
+    this.isSpinning = false;
+    this.velocityTheta = 0;
+    this.velocityPhi = 0;
+
     this.pointerState.isDragging = true;
     this.pointerState.lastX = event.clientX;
     this.pointerState.lastY = event.clientY;
+    this.pointerState.lastTime = performance.now();
     this.pointerState.axisLock = null;
     this.viewport.setPointerCapture(event.pointerId);
     event.preventDefault();
@@ -401,10 +432,13 @@ export class SplatViewer {
 
   private handlePointerMove = (event: PointerEvent) => {
     if (!this.pointerState.isDragging) return;
+    const now = performance.now();
+    const dt = Math.max(now - this.pointerState.lastTime, 1); // ms
     const deltaX = event.clientX - this.pointerState.lastX;
     const deltaY = event.clientY - this.pointerState.lastY;
     this.pointerState.lastX = event.clientX;
     this.pointerState.lastY = event.clientY;
+    this.pointerState.lastTime = now;
 
     const absX = Math.abs(deltaX);
     const absY = Math.abs(deltaY);
@@ -417,13 +451,26 @@ export class SplatViewer {
       }
     }
 
+    // Calculate angular change
+    const dTheta = -deltaX * this.rotateSpeed;
+    const dPhi = -deltaY * this.rotateSpeed;
+
+    // Update velocity (smoothed, convert to rad/frame at ~16.67ms per frame)
+    const frameTime = 16.67;
+    const velocitySmooth = 0.3;
     if (this.pointerState.axisLock === "horizontal") {
-      this.sphericalGoal.theta -= deltaX * this.rotateSpeed;
+      this.sphericalGoal.theta += dTheta;
+      this.velocityTheta = this.velocityTheta * (1 - velocitySmooth) + (dTheta / dt) * frameTime * velocitySmooth;
+      this.velocityPhi = 0;
     } else if (this.pointerState.axisLock === "vertical") {
-      this.sphericalGoal.phi -= deltaY * this.rotateSpeed;
+      this.sphericalGoal.phi += dPhi;
+      this.velocityPhi = this.velocityPhi * (1 - velocitySmooth) + (dPhi / dt) * frameTime * velocitySmooth;
+      this.velocityTheta = 0;
     } else {
-      this.sphericalGoal.theta -= deltaX * this.rotateSpeed;
-      this.sphericalGoal.phi -= deltaY * this.rotateSpeed;
+      this.sphericalGoal.theta += dTheta;
+      this.sphericalGoal.phi += dPhi;
+      this.velocityTheta = this.velocityTheta * (1 - velocitySmooth) + (dTheta / dt) * frameTime * velocitySmooth;
+      this.velocityPhi = this.velocityPhi * (1 - velocitySmooth) + (dPhi / dt) * frameTime * velocitySmooth;
     }
 
     event.preventDefault();
@@ -436,10 +483,24 @@ export class SplatViewer {
     this.pointerState.axisLock = null;
     this.viewport.releasePointerCapture(event.pointerId);
     event.preventDefault();
+
+    // Start inertia spin if there's enough velocity
+    const minVelocity = 0.0005;
+    if (Math.abs(this.velocityTheta) > minVelocity || Math.abs(this.velocityPhi) > minVelocity) {
+      this.isSpinning = true;
+    }
+
     this.requestRender();
   };
 
   private handlePointerLeave = () => {
+    if (this.pointerState.isDragging) {
+      // Start inertia spin if there's enough velocity
+      const minVelocity = 0.0005;
+      if (Math.abs(this.velocityTheta) > minVelocity || Math.abs(this.velocityPhi) > minVelocity) {
+        this.isSpinning = true;
+      }
+    }
     this.pointerState.isDragging = false;
     this.pointerState.axisLock = null;
     this.requestRender();
@@ -447,6 +508,11 @@ export class SplatViewer {
 
   private handleWheel = (event: WheelEvent) => {
     event.preventDefault();
+    // Stop inertia spin when zooming
+    this.isSpinning = false;
+    this.velocityTheta = 0;
+    this.velocityPhi = 0;
+
     const targetView = this.getViewFromPointer(event.clientX, event.clientY) ?? this.primaryView;
 
     if (event.ctrlKey && this.viewport) {
