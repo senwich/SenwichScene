@@ -13,6 +13,7 @@ interface ViewConfig {
   thetaOffset: number;
   viewport: { x: number; y: number; width: number; height: number };
   camera: THREE.PerspectiveCamera;
+  screenRotation: number;
 }
 
 export class SplatViewer {
@@ -113,25 +114,28 @@ export class SplatViewer {
         y: 0.5,
         width: 0.5,
         height: 0.5,
-      }),
+      }, -Math.PI / 4),
+      
       this.createView("东 (+X)", "top-right", 0, {
         x: 0.5,
         y: 0.5,
         width: 0.5,
         height: 0.5,
-      }),
+      }, Math.PI / 4),
+      
       this.createView("西 (-X)", "bottom-left", Math.PI, {
         x: 0,
         y: 0,
         width: 0.5,
         height: 0.5,
-      }),
+      }, -3 * Math.PI / 4),
+      
       this.createView("南 (-Y)", "bottom-right", -Math.PI / 2, {
         x: 0.5,
         y: 0,
         width: 0.5,
         height: 0.5,
-      }),
+      }, 3 * Math.PI / 4),
     ];
 
     this.primaryView = this.views.find((view) => view.thetaOffset === 0)!;
@@ -399,7 +403,8 @@ export class SplatViewer {
     name: string,
     position: ViewPosition,
     thetaOffset: number,
-    viewport: ViewConfig["viewport"]
+    viewport: ViewConfig["viewport"],
+    screenRotation: number = 0
   ): ViewConfig {
     const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 1000);
     camera.up.set(0, 0, 1);
@@ -409,6 +414,7 @@ export class SplatViewer {
       thetaOffset,
       viewport,
       camera,
+      screenRotation,
     };
     this.viewByPosition.set(position, view);
     return view;
@@ -551,7 +557,15 @@ export class SplatViewer {
       this.tempSpherical.theta += view.thetaOffset;
       setVectorFromOrbit(this.tempSpherical, this.cameraOffset).add(this.orbitTarget);
       view.camera.position.copy(this.cameraOffset);
+      
+      // Reset up vector and look at target
+      view.camera.up.set(0, 0, 1);
       view.camera.lookAt(this.orbitTarget);
+      
+      // Apply screen space rotation (Roll) around the local Z axis
+      if (view.screenRotation !== 0) {
+        view.camera.rotateZ(view.screenRotation);
+      }
     }
   }
 
