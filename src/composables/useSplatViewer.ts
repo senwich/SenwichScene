@@ -22,6 +22,18 @@ export function useSplatViewer() {
 
   const resetView = (immediate?: boolean) => viewer.resetView(immediate);
 
+  const loadFromUrl = (url: string) => {
+    viewer.loadFromUrl(url);
+  };
+
+  const loadTwilightSparkle = () => {
+    viewer.loadFromUrl('/models/TwilightSparkle/TwilightSparkle.obj');
+  };
+
+  const loadPinkiePie = () => {
+    viewer.loadFromUrl('/models/PinkiePie/PinkiePie.obj');
+  };
+
   onMounted(() => {
     if (container.value) {
       viewer.mount(container.value);
@@ -38,6 +50,9 @@ export function useSplatViewer() {
     triggerFileSelect,
     handleFileSelect,
     resetView,
+    loadFromUrl,
+    loadTwilightSparkle,
+    loadPinkiePie,
   };
 }
 

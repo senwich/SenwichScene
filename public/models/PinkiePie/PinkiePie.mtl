@@ -1,0 +1,11 @@
+# Material file for Pinkie Pie model
+
+newmtl ecverest
+Ka 1.0 1.0 1.0
+Kd 1.0 1.0 1.0
+Ks 0.2 0.2 0.2
+Ns 20.0
+illum 2
+map_Kd peaches.png
+map_Bump normals.png
+bump normals.png

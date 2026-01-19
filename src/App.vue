@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { useSplatViewer } from "./composables/useSplatViewer";
 
-const { container, fileInput, triggerFileSelect, handleFileSelect, resetView } = useSplatViewer();
+const { container, fileInput, triggerFileSelect, handleFileSelect, resetView, loadTwilightSparkle, loadPinkiePie } = useSplatViewer();
 </script>
 
 <template>
@@ -9,21 +9,26 @@ const { container, fileInput, triggerFileSelect, handleFileSelect, resetView } =
     <input
       ref="fileInput"
       type="file"
-      accept=".ply"
+      accept=".ply,.obj"
       @change="handleFileSelect"
       style="display: none"
     />
-    <button class="file-button" @click="triggerFileSelect">
-      随便扔点什么到这个奇怪的水晶球里🤔
-    </button>
-    <button class="reset-button" @click="resetView()">
-      made by 生橙式😋
-    </button>
-    <div class="view-labels">
-      <span class="view-label view-label--north">北 (+Y)</span>
-      <span class="view-label view-label--east">东 (+X)</span>
-      <span class="view-label view-label--west">西 (-X)</span>
-      <span class="view-label view-label--south">南 (-Y)</span>
+    <div class="controls-sidebar">
+      <button class="file-button" @click="triggerFileSelect">
+        随便扔点什么 🤔
+      </button>
+      <button class="twilight-button" @click="loadTwilightSparkle">
+        TS 🦄
+      </button>
+      <button class="pinkie-button" @click="loadPinkiePie">
+        PP 🧁
+      </button>
+      <button class="reset-button" @click="resetView()">
+        重置
+      </button>
+      <div class="credit-label">
+        made by 生橙式
+      </div>
     </div>
   </div>
 </template>
@@ -41,127 +46,97 @@ const { container, fileInput, triggerFileSelect, handleFileSelect, resetView } =
   background-color: #000;
 }
 
-.container::before,
-.container::after {
-  content: "";
-  position: absolute;
-  pointer-events: none;
-  background: rgba(255, 255, 255, 0.25);
-  z-index: 4;
-}
-
-.container::before {
-  top: 0;
-  bottom: 0;
-  width: 1px;
-  left: 50%;
-}
-
-.container::after {
-  left: 0;
-  right: 0;
-  height: 1px;
-  top: 50%;
-}
-
 .container:active {
   cursor: grabbing;
 }
 
-.file-button {
+.controls-sidebar {
   position: absolute;
   top: 20px;
-  left: 50%;
-  transform: translateX(-50%);
-  padding: 12px 24px;
-  font-size: 16px;
+  left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  z-index: 10;
+  pointer-events: none; /* Let clicks pass through empty space */
+}
+
+.controls-sidebar button {
+  pointer-events: auto; /* Enable clicks on buttons */
+  padding: 8px 16px;
+  font-size: 13px;
   font-weight: 500;
   color: white;
-  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
   border: none;
-  border-radius: 8px;
+  border-radius: 6px;
   cursor: pointer;
-  box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
-  transition: all 0.3s ease;
-  z-index: 10;
+  transition: all 0.2s ease;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  text-align: left;
+  width: 160px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.file-button {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  box-shadow: 0 2px 8px rgba(102, 126, 234, 0.4);
 }
 
 .file-button:hover {
-  transform: translateX(-50%) translateY(-2px);
-  box-shadow: 0 6px 20px rgba(102, 126, 234, 0.6);
+  transform: translateX(2px);
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.6);
 }
 
-.file-button:active {
-  transform: translateX(-50%) translateY(0);
-  box-shadow: 0 2px 10px rgba(102, 126, 234, 0.4);
+.twilight-button {
+  background: linear-gradient(135deg, #9b59b6 0%, #8e44ad 100%);
+  box-shadow: 0 2px 8px rgba(155, 89, 182, 0.4);
+}
+
+.twilight-button:hover {
+  transform: translateX(2px);
+  box-shadow: 0 4px 12px rgba(155, 89, 182, 0.6);
+}
+
+.pinkie-button {
+  background: linear-gradient(135deg, #e91e63 0%, #ec407a 100%);
+  box-shadow: 0 2px 8px rgba(233, 30, 99, 0.4);
+}
+
+.pinkie-button:hover {
+  transform: translateX(2px);
+  box-shadow: 0 4px 12px rgba(233, 30, 99, 0.6);
 }
 
 .reset-button {
-  position: absolute;
-  top: 70px;
-  left: 50%;
-  transform: translateX(-50%);
-  padding: 10px 20px;
-  font-size: 14px;
-  font-weight: 500;
-  color: #444;
   background: rgba(255, 255, 255, 0.9);
-  border: 1px solid rgba(118, 75, 162, 0.35);
-  border-radius: 8px;
-  cursor: pointer;
-  box-shadow: 0 3px 10px rgba(118, 75, 162, 0.15);
-  transition: all 0.3s ease;
-  z-index: 9;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  color: #444 !important;
+  border: 1px solid rgba(118, 75, 162, 0.35) !important;
+  box-shadow: 0 2px 8px rgba(118, 75, 162, 0.15);
 }
 
 .reset-button:hover {
   background: rgba(255, 255, 255, 1);
-  box-shadow: 0 5px 16px rgba(118, 75, 162, 0.25);
+  transform: translateX(2px);
+  box-shadow: 0 4px 12px rgba(118, 75, 162, 0.25);
 }
 
-.reset-button:active {
-  transform: translateX(-50%) translateY(1px);
-  box-shadow: 0 2px 8px rgba(118, 75, 162, 0.2);
+.controls-sidebar button:active {
+  transform: translateX(0);
+  opacity: 0.9;
 }
 
-.view-labels {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-  font-size: 13px;
-  color: white;
-  z-index: 5;
-}
-
-.view-label {
-  position: absolute;
+.credit-label {
+  margin-top: 5px;
   padding: 4px 8px;
-  border-radius: 999px;
-  background: rgba(0, 0, 0, 0.45);
-  backdrop-filter: blur(2px);
-  text-shadow: 0 0 4px rgba(0, 0, 0, 0.85);
-}
-
-.view-label--north {
-  top: 12px;
-  left: 12px;
-}
-
-.view-label--east {
-  top: 12px;
-  right: 12px;
-}
-
-.view-label--west {
-  bottom: 12px;
-  left: 12px;
-}
-
-.view-label--south {
-  bottom: 12px;
-  right: 12px;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.5);
+  text-align: center;
+  user-select: none;
+  pointer-events: none;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  padding-top: 10px;
 }
 </style>

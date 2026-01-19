@@ -1,5 +1,7 @@
 import * as THREE from "three";
 import { SplatMesh } from "@sparkjsdev/spark";
+import { OBJLoader } from "three-stdlib";
+import { MTLLoader } from "three-stdlib";
 import { setOrbitFromVector, setVectorFromOrbit } from "./orbitMath";
 
 type AxisLock = "horizontal" | "vertical" | null;
@@ -28,9 +30,15 @@ export class SplatViewer {
   private container: HTMLDivElement | null = null;
   private viewport: HTMLCanvasElement | null = null;
 
-  private butterfly: SplatMesh | null = null;
+  private model: THREE.Object3D | null = null;
   private currentObjectUrl: string | null = null;
   private currentLoadToken = 0;
+
+  // Lights for OBJ models
+  private readonly ambientLight: THREE.AmbientLight;
+  private readonly directionalLight1: THREE.DirectionalLight;
+  private readonly directionalLight2: THREE.DirectionalLight;
+  private readonly directionalLight3: THREE.DirectionalLight;
 
   private readonly initialCameraDirection = new THREE.Vector3(0.75, 0.35, 1).normalize();
   private readonly defaultTarget = new THREE.Vector3(0, 0, 0);
@@ -83,6 +91,22 @@ export class SplatViewer {
     this.renderer.autoClear = false;
     this.renderer.setScissorTest(true);
 
+    // Setup lighting for OBJ models
+    this.ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+    this.scene.add(this.ambientLight);
+
+    this.directionalLight1 = new THREE.DirectionalLight(0xffffff, 0.8);
+    this.directionalLight1.position.set(5, 5, 5);
+    this.scene.add(this.directionalLight1);
+
+    this.directionalLight2 = new THREE.DirectionalLight(0xffffff, 0.4);
+    this.directionalLight2.position.set(-5, 3, -5);
+    this.scene.add(this.directionalLight2);
+
+    this.directionalLight3 = new THREE.DirectionalLight(0xffffff, 0.3);
+    this.directionalLight3.position.set(0, -5, 0);
+    this.scene.add(this.directionalLight3);
+
     this.views = [
       this.createView("北 (+Y)", "top-left", Math.PI / 2, {
         x: 0,
@@ -134,7 +158,7 @@ export class SplatViewer {
     this.removeViewportListeners();
     this.viewport = null;
 
-    this.disposeButterfly();
+    this.disposeModel();
     this.disposeStaleMeshes();
     this.revokeCurrentObjectUrl();
 
@@ -152,7 +176,7 @@ export class SplatViewer {
 
   loadFile(file?: File | null) {
     const loadToken = ++this.currentLoadToken;
-    this.disposeButterfly();
+    this.disposeModel();
     this.disposeStaleMeshes();
     this.revokeCurrentObjectUrl();
     this.requestRender();
@@ -163,20 +187,195 @@ export class SplatViewer {
 
     const url = URL.createObjectURL(file);
     this.currentObjectUrl = url;
+    const fileName = file.name.toLowerCase();
 
-    const newButterfly = new SplatMesh({ url });
-    newButterfly.quaternion.set(0, 0, 0, 1);
-    newButterfly.position.set(0, 0, 0);
-    this.scene.add(newButterfly);
-    this.butterfly = newButterfly;
+    if (fileName.endsWith('.ply')) {
+      this.loadPlyFile(url, loadToken);
+    } else if (fileName.endsWith('.obj')) {
+      this.loadObjFile(url, loadToken);
+    } else {
+      console.error("Unsupported file format. Please use .ply or .obj files.");
+      this.revokeCurrentObjectUrl();
+    }
+  }
+
+  loadFromUrl(url: string) {
+    const loadToken = ++this.currentLoadToken;
+    this.disposeModel();
+    this.disposeStaleMeshes();
+    this.revokeCurrentObjectUrl();
     this.requestRender();
 
-    newButterfly.initialized.then(() => {
-      if (this.butterfly !== newButterfly || loadToken !== this.currentLoadToken) {
+    const fileName = url.toLowerCase();
+
+    if (fileName.endsWith('.ply')) {
+      this.loadPlyFile(url, loadToken);
+    } else if (fileName.endsWith('.obj')) {
+      this.loadObjWithMtl(url, loadToken);
+    } else {
+      console.error("Unsupported file format. Please use .ply or .obj files.");
+    }
+  }
+
+  private loadPlyFile(url: string, loadToken: number) {
+    const newModel = new SplatMesh({ url });
+    newModel.quaternion.set(0, 0, 0, 1);
+    newModel.position.set(0, 0, 0);
+    this.scene.add(newModel);
+    this.model = newModel;
+    this.requestRender();
+
+    newModel.initialized.then(() => {
+      if (this.model !== newModel || loadToken !== this.currentLoadToken) {
         return;
       }
-      this.fitViewToMesh(newButterfly);
+      this.fitViewToModel(newModel);
     });
+  }
+
+  private async loadObjFile(url: string, loadToken: number) {
+    try {
+      const objResponse = await fetch(url);
+      const objText = await objResponse.text();
+
+      // Load the OBJ file
+      const objLoader = new OBJLoader();
+      const newModel = objLoader.parse(objText);
+      
+      // Apply default materials with good lighting response
+      newModel.traverse((child) => {
+        if (child instanceof THREE.Mesh) {
+          // Replace any existing material with a well-lit standard material
+          const material = new THREE.MeshStandardMaterial({
+            color: 0xcccccc,
+            roughness: 0.5,
+            metalness: 0.1,
+            side: THREE.DoubleSide,
+          });
+          child.material = material;
+          child.castShadow = true;
+          child.receiveShadow = true;
+        }
+      });
+
+      newModel.quaternion.set(0, 0, 0, 1);
+      newModel.position.set(0, 0, 0);
+      
+      // Scale appropriately - OBJ files often use centimeters
+      const bbox = new THREE.Box3().setFromObject(newModel);
+      const size = bbox.getSize(new THREE.Vector3());
+      const maxDim = Math.max(size.x, size.y, size.z);
+      if (maxDim > 10) {
+        const scale = 10 / maxDim;
+        newModel.scale.set(scale, scale, scale);
+      }
+      
+      this.scene.add(newModel);
+      this.model = newModel;
+      this.requestRender();
+      
+      if (this.model === newModel && loadToken === this.currentLoadToken) {
+        this.fitViewToModel(newModel);
+      }
+    } catch (error) {
+      console.error("Error loading OBJ file:", error);
+    }
+  }
+
+  private async loadObjWithMtl(url: string, loadToken: number) {
+    try {
+      // Get the base path for loading MTL and textures
+      const basePath = url.substring(0, url.lastIndexOf('/') + 1);
+      
+      // Load the OBJ file first to check for MTL reference
+      const objResponse = await fetch(url);
+      const objText = await objResponse.text();
+
+      // Check if the OBJ file references an MTL file
+      const mtlMatch = objText.match(/^mtllib\s+(.+)$/m);
+      let materials: MTLLoader.MaterialCreator | undefined;
+
+      if (mtlMatch) {
+        const mtlFilename = mtlMatch[1].trim();
+        const mtlUrl = basePath + mtlFilename;
+        
+        try {
+          const mtlLoader = new MTLLoader();
+          mtlLoader.setPath(basePath);
+          
+          const mtlResponse = await fetch(mtlUrl);
+          const mtlText = await mtlResponse.text();
+          materials = mtlLoader.parse(mtlText, basePath);
+          materials.preload();
+        } catch (e) {
+          console.warn("Could not load MTL file, using default materials", e);
+        }
+      }
+
+      // Load the OBJ file
+      const objLoader = new OBJLoader();
+      if (materials) {
+        objLoader.setMaterials(materials);
+      }
+      
+      const newModel = objLoader.parse(objText);
+      
+      // If no materials were loaded, apply default materials
+      if (!materials) {
+        newModel.traverse((child) => {
+          if (child instanceof THREE.Mesh) {
+            const material = new THREE.MeshStandardMaterial({
+              color: 0xcccccc,
+              roughness: 0.5,
+              metalness: 0.1,
+              side: THREE.DoubleSide,
+            });
+            child.material = material;
+            child.castShadow = true;
+            child.receiveShadow = true;
+          }
+        });
+      } else {
+        // Ensure materials are properly configured for lighting
+        newModel.traverse((child) => {
+          if (child instanceof THREE.Mesh) {
+            child.castShadow = true;
+            child.receiveShadow = true;
+            if (child.material) {
+              if (Array.isArray(child.material)) {
+                child.material.forEach((mat) => {
+                  mat.side = THREE.DoubleSide;
+                });
+              } else {
+                child.material.side = THREE.DoubleSide;
+              }
+            }
+          }
+        });
+      }
+
+      newModel.quaternion.set(0, 0, 0, 1);
+      newModel.position.set(0, 0, 0);
+      
+      // Scale appropriately - OBJ files often use centimeters
+      const bbox = new THREE.Box3().setFromObject(newModel);
+      const size = bbox.getSize(new THREE.Vector3());
+      const maxDim = Math.max(size.x, size.y, size.z);
+      if (maxDim > 10) {
+        const scale = 10 / maxDim;
+        newModel.scale.set(scale, scale, scale);
+      }
+      
+      this.scene.add(newModel);
+      this.model = newModel;
+      this.requestRender();
+      
+      if (this.model === newModel && loadToken === this.currentLoadToken) {
+        this.fitViewToModel(newModel);
+      }
+    } catch (error) {
+      console.error("Error loading OBJ file with MTL:", error);
+    }
   }
 
   resetView(immediate = false) {
@@ -233,23 +432,54 @@ export class SplatViewer {
     this.viewport.removeEventListener("wheel", this.handleWheel);
   }
 
-  private disposeButterfly() {
-    if (!this.butterfly) return;
-    this.scene.remove(this.butterfly);
-    this.butterfly.dispose();
-    this.butterfly = null;
+  private disposeModel() {
+    if (!this.model) return;
+    this.scene.remove(this.model);
+    if (this.model instanceof SplatMesh) {
+      this.model.dispose();
+    } else {
+      // Dispose of materials and geometries for regular Object3D
+      this.model.traverse((child) => {
+        if (child instanceof THREE.Mesh) {
+          if (child.geometry) child.geometry.dispose();
+          if (child.material) {
+            if (Array.isArray(child.material)) {
+              child.material.forEach((mat) => mat.dispose());
+            } else {
+              child.material.dispose();
+            }
+          }
+        }
+      });
+    }
+    this.model = null;
   }
 
   private disposeStaleMeshes() {
-    const staleMeshes: SplatMesh[] = [];
+    const staleObjects: THREE.Object3D[] = [];
     for (const child of this.scene.children) {
-      if (child instanceof SplatMesh && child !== this.butterfly) {
-        staleMeshes.push(child);
+      if (child !== this.model && (child instanceof SplatMesh || child.type === "Group" || child instanceof THREE.Mesh)) {
+        staleObjects.push(child);
       }
     }
-    for (const mesh of staleMeshes) {
-      this.scene.remove(mesh);
-      mesh.dispose();
+    for (const obj of staleObjects) {
+      this.scene.remove(obj);
+      if (obj instanceof SplatMesh) {
+        obj.dispose();
+      } else {
+        obj.traverse((child) => {
+          if (child instanceof THREE.Mesh) {
+            if (child.geometry) child.geometry.dispose();
+            if (child.material) {
+              if (Array.isArray(child.material)) {
+                child.material.forEach((mat) => mat.dispose());
+              } else {
+                child.material.dispose();
+              }
+            }
+          }
+        });
+      }
     }
   }
 
@@ -259,9 +489,20 @@ export class SplatViewer {
     this.currentObjectUrl = null;
   }
 
-  private async fitViewToMesh(mesh: SplatMesh) {
-    await mesh.initialized;
-    const bbox = mesh.getBoundingBox();
+  private async fitViewToModel(model: THREE.Object3D) {
+    // Wait for initialization if it's a SplatMesh
+    if (model instanceof SplatMesh) {
+      await model.initialized;
+    }
+    
+    // Calculate bounding box
+    let bbox: THREE.Box3;
+    if (model instanceof SplatMesh) {
+      bbox = model.getBoundingBox();
+    } else {
+      bbox = new THREE.Box3().setFromObject(model);
+    }
+    
     const center = bbox.getCenter(new THREE.Vector3());
     const size = bbox.getSize(new THREE.Vector3());
     const maxDim = Math.max(size.x, size.y, size.z);

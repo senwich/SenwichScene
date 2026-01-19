@@ -1,0 +1,29 @@
+# Material file for Twilight Sparkle model
+# Corrected texture mapping attempt 2
+
+# blinn6SG - Largest group (~14k faces) -> Body
+newmtl blinn6SG
+Ka 1.0 1.0 1.0
+Kd 1.0 1.0 1.0
+Ks 0.3 0.3 0.3
+Ns 32.0
+illum 2
+map_Kd Twilight_body.jpg
+
+# blinn7SG - Medium group (~7.7k faces) -> Hair (Mane/Tail)
+newmtl blinn7SG
+Ka 1.0 1.0 1.0
+Kd 1.0 1.0 1.0
+Ks 0.2 0.2 0.2
+Ns 16.0
+illum 2
+map_Kd Twilight_hair.jpg
+
+# blinn8SG - Smallest group (~385 faces) -> Eyes
+newmtl blinn8SG
+Ka 1.0 1.0 1.0
+Kd 1.0 1.0 1.0
+Ks 0.5 0.5 0.5
+Ns 64.0
+illum 2
+map_Kd Twilight_eye.jpg
