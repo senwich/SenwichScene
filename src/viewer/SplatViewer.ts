@@ -24,9 +24,9 @@ export class SplatViewer {
     powerPreference: "high-performance",
   });
 
-  private readonly views: ViewConfig[];
+  private views: ViewConfig[];
   private readonly viewByPosition = new Map<ViewPosition, ViewConfig>();
-  private readonly primaryView: ViewConfig;
+  private primaryView: ViewConfig;
 
   private container: HTMLDivElement | null = null;
   private viewport: HTMLCanvasElement | null = null;
@@ -40,6 +40,15 @@ export class SplatViewer {
   private readonly directionalLight1: THREE.DirectionalLight;
   private readonly directionalLight2: THREE.DirectionalLight;
   private readonly directionalLight3: THREE.DirectionalLight;
+
+  // Pony Care System
+  private particleSystem: THREE.Points | null = null;
+  private particleVelocities: Float32Array | null = null;
+  private currentEnergy = 1.0;
+  // Store original colors/intensities to restore/lerp
+  private originalMaterials = new Map<THREE.Material, { color: THREE.Color, emissive?: THREE.Color }>();
+  private baseScale = new THREE.Vector3(1, 1, 1);
+  private basePosition = new THREE.Vector3(0, 0, 0);
 
   private readonly initialCameraDirection = new THREE.Vector3(0.75, 0.35, 1).normalize();
   private readonly defaultTarget = new THREE.Vector3(0, 0, 0);
@@ -108,6 +117,18 @@ export class SplatViewer {
     this.directionalLight3.position.set(0, -5, 0);
     this.scene.add(this.directionalLight3);
 
+    this.initParticles();
+
+    this.setupQuadViews();
+    // Default to quad views
+    
+    this.syncRendererSize();
+    this.orbitTarget.copy(this.defaultTarget);
+    this.syncDefaultOrbit();
+    this.resetView(true);
+  }
+
+  setupQuadViews() {
     this.views = [
       this.createView("北 (+Y)", "top-left", Math.PI / 2, {
         x: 0,
@@ -137,13 +158,39 @@ export class SplatViewer {
         height: 0.5,
       }, 3 * Math.PI / 4),
     ];
-
     this.primaryView = this.views.find((view) => view.thetaOffset === 0)!;
+    this.syncRendererSize(); // Update aspect ratios
+  }
 
+  setupSingleView() {
+    // Create a single view looking from South (Front) but without rotation
+    // Or use East view (theta 0) as primary? 
+    // Usually Theta 0 is East (+X).
+    // Let's use standard Front view which might correspond to -Y or +Y depending on model.
+    // In our quad setup:
+    // South (-Y) is theta -PI/2.
+    // Let's use South view as the single view, but fill screen and no rotation.
+    
+    this.views = [
+      this.createView("主视图", "bottom-right", -Math.PI / 2, {
+        x: 0,
+        y: 0,
+        width: 1,
+        height: 1,
+      }, 0) // No rotation
+    ];
+    this.primaryView = this.views[0];
     this.syncRendererSize();
-    this.orbitTarget.copy(this.defaultTarget);
-    this.syncDefaultOrbit();
-    this.resetView(true);
+  }
+
+  setViewMode(mode: 'quad' | 'single') {
+    if (mode === 'quad') {
+      this.setupQuadViews();
+    } else {
+      this.setupSingleView();
+    }
+    this.updateCamera(true);
+    this.requestRender();
   }
 
   mount(container: HTMLDivElement) {
@@ -276,6 +323,7 @@ export class SplatViewer {
       
       this.scene.add(newModel);
       this.model = newModel;
+      this.captureOriginalMaterials(newModel); // Capture materials for energy system
       this.requestRender();
       
       if (this.model === newModel && loadToken === this.currentLoadToken) {
@@ -372,6 +420,7 @@ export class SplatViewer {
       
       this.scene.add(newModel);
       this.model = newModel;
+      this.captureOriginalMaterials(newModel); // Capture materials for energy system
       this.requestRender();
       
       if (this.model === newModel && loadToken === this.currentLoadToken) {
@@ -627,6 +676,44 @@ export class SplatViewer {
   }
 
   private renderLoop = () => {
+    // Animate Particles
+    if (this.particleSystem && this.particleVelocities) {
+      const positions = this.particleSystem.geometry.attributes.position.array as Float32Array;
+      const count = positions.length / 3;
+      const time = Date.now() * 0.001;
+      
+      // Speed scales with energy
+      const speedScale = 0.2 + this.currentEnergy * 0.8;
+      
+      for (let i = 0; i < count; i++) {
+        const i3 = i * 3;
+        
+        // Circular motion + vertical drift
+        // Simple orbit logic:
+        const x = positions[i3];
+        const y = positions[i3 + 1];
+        const z = positions[i3 + 2]; // Z is up in our world
+        
+        // Orbit around Z axis
+        const speed = this.particleVelocities[i] * speedScale;
+        const radius = Math.sqrt(x*x + y*y);
+        const angle = Math.atan2(y, x) + speed * 0.01;
+        
+        positions[i3] = Math.cos(angle) * radius;
+        positions[i3 + 1] = Math.sin(angle) * radius;
+        
+        // Gentle vertical bobbing
+        positions[i3 + 2] = z + Math.sin(time + i) * 0.002 * speedScale;
+      }
+      
+      this.particleSystem.geometry.attributes.position.needsUpdate = true;
+      
+      // Request render if particles are visible (energy > 0)
+      if (this.currentEnergy > 0.01) {
+        this.needsRender = true;
+      }
+    }
+
     // Apply inertia velocity (constant angular velocity, no friction)
     if (this.isSpinning && !this.pointerState.isDragging) {
       this.sphericalGoal.theta += this.velocityTheta;
@@ -862,5 +949,139 @@ export class SplatViewer {
     this.syncRendererSize();
     this.requestRender();
   };
+
+  private initParticles() {
+    const particleCount = 100;
+    const geometry = new THREE.BufferGeometry();
+    const positions = new Float32Array(particleCount * 3);
+    const velocities = new Float32Array(particleCount);
+
+    for (let i = 0; i < particleCount; i++) {
+      // Random position in a sphere/shell
+      const r = 2 + Math.random() * 3;
+      const theta = Math.random() * Math.PI * 2;
+      const phi = Math.acos(2 * Math.random() - 1);
+      
+      positions[i * 3] = r * Math.sin(phi) * Math.cos(theta);
+      positions[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta);
+      positions[i * 3 + 2] = r * Math.cos(phi);
+      
+      velocities[i] = (Math.random() - 0.5) * 2; // Random orbit speed
+    }
+
+    geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    this.particleVelocities = velocities;
+
+    const texture = this.createParticleTexture();
+    const material = new THREE.PointsMaterial({
+      color: 0xffdd88, // Warm magical glow
+      size: 0.15,
+      map: texture,
+      transparent: true,
+      opacity: 0, // Start invisible
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    });
+
+    this.particleSystem = new THREE.Points(geometry, material);
+    this.scene.add(this.particleSystem);
+  }
+
+  private createParticleTexture() {
+    const canvas = document.createElement('canvas');
+    canvas.width = 32;
+    canvas.height = 32;
+    const context = canvas.getContext('2d');
+    if (context) {
+      const gradient = context.createRadialGradient(16, 16, 0, 16, 16, 16);
+      gradient.addColorStop(0, 'rgba(255, 255, 255, 1)');
+      gradient.addColorStop(0.4, 'rgba(255, 255, 255, 0.5)');
+      gradient.addColorStop(1, 'rgba(255, 255, 255, 0)');
+      context.fillStyle = gradient;
+      context.fillRect(0, 0, 32, 32);
+    }
+    const texture = new THREE.CanvasTexture(canvas);
+    return texture;
+  }
+
+  private captureOriginalMaterials(model: THREE.Object3D) {
+    this.originalMaterials.clear();
+    
+    // Capture base transform
+    this.baseScale.copy(model.scale);
+    this.basePosition.copy(model.position);
+
+    model.traverse((child) => {
+      if (child instanceof THREE.Mesh) {
+        const material = child.material;
+        if (material instanceof THREE.MeshStandardMaterial || material instanceof THREE.MeshBasicMaterial || material instanceof THREE.MeshPhongMaterial) {
+          this.originalMaterials.set(material, {
+            color: material.color.clone(),
+            emissive: 'emissive' in material ? (material as THREE.MeshStandardMaterial).emissive?.clone() : undefined
+          });
+        } else if (Array.isArray(material)) {
+           material.forEach(m => {
+             if (m instanceof THREE.MeshStandardMaterial || m instanceof THREE.MeshBasicMaterial || m instanceof THREE.MeshPhongMaterial) {
+               this.originalMaterials.set(m, {
+                 color: m.color.clone(),
+                 emissive: 'emissive' in m ? (m as THREE.MeshStandardMaterial).emissive?.clone() : undefined
+               });
+             }
+           });
+        }
+      }
+    });
+    // Immediately apply current energy state to new model
+    this.updateEnergy(this.currentEnergy);
+  }
+
+  updateEnergy(energy: number) {
+    this.currentEnergy = energy;
+    
+    // 1. Update Lighting
+    // Base ambient: 0.1 -> 0.6 (Stronger contrast)
+    this.ambientLight.intensity = 0.1 + energy * 0.5;
+    // Directional lights: very dim -> bright
+    this.directionalLight1.intensity = 0.1 + energy * 0.9;
+    this.directionalLight2.intensity = 0.0 + energy * 0.4;
+    this.directionalLight3.intensity = 0.0 + energy * 0.3;
+
+    // 2. Update Particles
+    if (this.particleSystem) {
+      const material = this.particleSystem.material as THREE.PointsMaterial;
+      material.opacity = Math.max(0, energy * 1.0); // Full range
+      material.size = 0.02 + energy * 0.18; // More dramatic size change
+    }
+
+    // 3. Update Model Colors
+    // 0% energy = Dark Grey (0x222222) -> More dramatic "dead" look
+    const greyColor = new THREE.Color(0x222222);
+    
+    this.originalMaterials.forEach((original, material) => {
+      // Lerp color
+      material.color.copy(original.color).lerp(greyColor, 1 - energy);
+      
+      // Handle emissive
+      if ('emissive' in material && original.emissive) {
+        const mat = material as THREE.MeshStandardMaterial;
+        mat.emissive.copy(original.emissive).multiplyScalar(energy);
+      }
+    });
+
+    // 4. Update Transform (Scale & Height)
+    if (this.model) {
+      // Scale: 0.5 to 1.0 (Dramatic shrink)
+      const scaleFactor = 0.5 + energy * 0.5;
+      this.model.scale.copy(this.baseScale).multiplyScalar(scaleFactor);
+      
+      // Height: Drop down
+      // Z is Up. Drop by 0.5 units at 0 energy
+      const zOffset = -0.5 * (1 - energy);
+      this.model.position.copy(this.basePosition);
+      this.model.position.z += zOffset;
+    }
+    
+    this.requestRender();
+  }
 }
 

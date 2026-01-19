@@ -1,7 +1,21 @@
 <script setup lang="ts">
+import { ref, watch } from "vue";
 import { useSplatViewer } from "./composables/useSplatViewer";
+import { usePonyCare } from "./composables/usePonyCare";
 
-const { container, fileInput, triggerFileSelect, handleFileSelect, resetView, loadTwilightSparkle, loadPinkiePie } = useSplatViewer();
+const { container, fileInput, triggerFileSelect, handleFileSelect, resetView, loadTwilightSparkle, loadPinkiePie, updateEnergy, setViewMode } = useSplatViewer();
+const { energy } = usePonyCare();
+
+const isQuadMode = ref(true);
+const toggleViewMode = () => {
+  isQuadMode.value = !isQuadMode.value;
+  setViewMode(isQuadMode.value ? 'quad' : 'single');
+};
+
+// Connect energy system to viewer
+watch(energy, (newEnergy) => {
+  updateEnergy(newEnergy);
+});
 </script>
 
 <template>
@@ -23,9 +37,19 @@ const { container, fileInput, triggerFileSelect, handleFileSelect, resetView, lo
       <button class="pinkie-button" @click="loadPinkiePie">
         PP 🧁
       </button>
+      <button class="mode-button" @click="toggleViewMode">
+        {{ isQuadMode ? '单视图 ⏹️' : '全息 ❖' }}
+      </button>
       <button class="reset-button" @click="resetView()">
         重置
       </button>
+      
+      <div class="energy-indicator" title="Focus Energy">
+        <div class="energy-bar">
+          <div class="energy-fill" :style="{ width: (energy * 100) + '%' }"></div>
+        </div>
+      </div>
+
       <div class="credit-label">
         made by 生橙式
       </div>
@@ -109,6 +133,16 @@ const { container, fileInput, triggerFileSelect, handleFileSelect, resetView, lo
   box-shadow: 0 4px 12px rgba(233, 30, 99, 0.6);
 }
 
+.mode-button {
+  background: rgba(255, 255, 255, 0.15);
+  border: 1px solid rgba(255, 255, 255, 0.2) !important;
+}
+
+.mode-button:hover {
+  background: rgba(255, 255, 255, 0.25);
+  transform: translateX(2px);
+}
+
 .reset-button {
   background: rgba(255, 255, 255, 0.9);
   color: #444 !important;
@@ -125,6 +159,26 @@ const { container, fileInput, triggerFileSelect, handleFileSelect, resetView, lo
 .controls-sidebar button:active {
   transform: translateX(0);
   opacity: 0.9;
+}
+
+.energy-indicator {
+  padding: 0 4px;
+  margin-top: 5px;
+}
+
+.energy-bar {
+  width: 100%;
+  height: 3px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.energy-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #ff9a9e 0%, #fecfef 99%, #fecfef 100%);
+  transition: width 0.5s linear;
+  box-shadow: 0 0 5px rgba(255, 154, 158, 0.5);
 }
 
 .credit-label {
