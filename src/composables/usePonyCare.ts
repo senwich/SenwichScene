@@ -17,12 +17,6 @@ export function usePonyCare() {
 
   const loadState = () => {
     try {
-      // DEBUG: Force start at 0 to test growth
-      energy.value = 0.0;
-      console.log("[PonyCare] DEBUG: Reset energy to 0.0 for testing");
-      return; 
-
-      /* Original Logic
       const stored = localStorage.getItem(STORAGE_KEY);
       if (stored) {
         const state = JSON.parse(stored);
@@ -31,10 +25,14 @@ export function usePonyCare() {
         
         // Apply decay for offline time
         const offlineDecay = elapsedSec * DECAY_RATE;
-        energy.value = Math.max(0, state.energy - offlineDecay);
-        console.log(`[PonyCare] Offline for ${elapsedSec.toFixed(0)}s, decay: ${offlineDecay.toFixed(4)}, current energy: ${energy.value.toFixed(4)}`);
+        // Don't go below 0
+        const newEnergy = Math.max(0, state.energy - offlineDecay);
+        energy.value = newEnergy;
+        
+        console.log(`[PonyCare] Loaded state. Offline for ${elapsedSec.toFixed(1)}s. Decay: -${offlineDecay.toFixed(3)}. New Energy: ${newEnergy.toFixed(3)}`);
+      } else {
+        energy.value = 0.5; // Default start
       }
-      */
     } catch (e) {
       console.error("Failed to load pony care state", e);
       energy.value = 0.5; // Default start
@@ -86,19 +84,18 @@ export function usePonyCare() {
 
   const handleVisibilityChange = () => {
     const now = Date.now();
-    const dt = (now - lastTime) / 1000;
     
     if (document.hidden) {
       // Going hidden
       isVisible.value = false;
-      // Apply any pending growth/decay before saving
       saveState();
+      console.log("[PonyCare] Hidden. State saved.");
     } else {
       // Coming back
-      // Calculate decay for the time we were hidden/backgrounded if rAF stopped
-      loadState(); // This recalculates based on last saved time
       isVisible.value = true;
       lastTime = now;
+      console.log("[PonyCare] Visible. Recalculating...");
+      loadState(); 
     }
   };
 

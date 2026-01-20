@@ -49,6 +49,15 @@ export class SplatViewer {
   private originalMaterials = new Map<THREE.Material, { color: THREE.Color, emissive?: THREE.Color }>();
   private baseScale = new THREE.Vector3(1, 1, 1);
   private basePosition = new THREE.Vector3(0, 0, 0);
+  private eyeMaterial: THREE.MeshStandardMaterial | null = null;
+  private currentCharacter: 'twilight' | 'pinkie' | 'unknown' = 'unknown';
+  
+  // Animation Uniforms
+  private globalUniforms = {
+    uTime: { value: 0 },
+    uEnergy: { value: 0 },
+    uSway: { value: 0 }
+  };
 
   private readonly initialCameraDirection = new THREE.Vector3(0.75, 0.35, 1).normalize();
   private readonly defaultTarget = new THREE.Vector3(0, 0, 0);
@@ -335,6 +344,15 @@ export class SplatViewer {
   }
 
   private async loadObjWithMtl(url: string, loadToken: number) {
+    // Detect Character
+    if (url.toLowerCase().includes('twilight')) {
+      this.currentCharacter = 'twilight';
+    } else if (url.toLowerCase().includes('pinkie')) {
+      this.currentCharacter = 'pinkie';
+    } else {
+      this.currentCharacter = 'unknown';
+    }
+
     try {
       // Get the base path for loading MTL and textures
       const basePath = url.substring(0, url.lastIndexOf('/') + 1);
@@ -567,7 +585,7 @@ export class SplatViewer {
 
     this.defaultTarget.copy(center);
     this.orbitTarget.copy(center);
-    this.defaultDistance = Math.max(fitDistance * 1.1, boundingRadius * 2);
+    this.defaultDistance = Math.max(fitDistance * 1.5, boundingRadius * 3);
 
     this.syncDefaultOrbit();
     this.resetView(true);
@@ -676,6 +694,33 @@ export class SplatViewer {
   }
 
   private renderLoop = () => {
+    // Update Uniforms
+    const time = Date.now() * 0.001;
+    this.globalUniforms.uTime.value = time;
+    
+    // Animate Eyes (Twilight)
+    if (this.eyeMaterial && this.eyeMaterial.map) {
+      let targetX = 0;
+      let targetY = 0;
+      
+      if (this.pointerState.isDragging) {
+        const width = window.innerWidth;
+        const height = window.innerHeight;
+        // Look at pointer
+        targetX = (this.pointerState.lastX / width - 0.5) * 0.15;
+        targetY = (this.pointerState.lastY / height - 0.5) * 0.15;
+      } else {
+        // Idle: Occasional blinking or saccades could go here
+        // For now, return to center
+      }
+      
+      const currentX = this.eyeMaterial.map.offset.x;
+      const currentY = this.eyeMaterial.map.offset.y;
+      // Smoothly follow
+      this.eyeMaterial.map.offset.x += (targetX - currentX) * 0.1;
+      this.eyeMaterial.map.offset.y += (targetY - currentY) * 0.1;
+    }
+    
     // Animate Particles
     if (this.particleSystem && this.particleVelocities) {
       const positions = this.particleSystem.geometry.attributes.position.array as Float32Array;
@@ -1011,23 +1056,82 @@ export class SplatViewer {
     this.baseScale.copy(model.scale);
     this.basePosition.copy(model.position);
 
+    // Calculate Bounding Box (in Local Space) to determine "Legs" area
+    // Since model.scale applies to the whole group, we need to unscale the bbox
+    // or calculate it from geometries directly.
+    const bbox = new THREE.Box3();
+    model.traverse((child) => {
+      if (child instanceof THREE.Mesh) {
+        if (!child.geometry.boundingBox) child.geometry.computeBoundingBox();
+        bbox.union(child.geometry.boundingBox!);
+      }
+    });
+    
+    const height = bbox.max.y - bbox.min.y;
+    const minY = bbox.min.y;
+    console.log("Model Local BBox Y:", minY, "to", bbox.max.y, "Height:", height);
+
     model.traverse((child) => {
       if (child instanceof THREE.Mesh) {
         const material = child.material;
-        if (material instanceof THREE.MeshStandardMaterial || material instanceof THREE.MeshBasicMaterial || material instanceof THREE.MeshPhongMaterial) {
-          this.originalMaterials.set(material, {
-            color: material.color.clone(),
-            emissive: 'emissive' in material ? (material as THREE.MeshStandardMaterial).emissive?.clone() : undefined
-          });
-        } else if (Array.isArray(material)) {
-           material.forEach(m => {
-             if (m instanceof THREE.MeshStandardMaterial || m instanceof THREE.MeshBasicMaterial || m instanceof THREE.MeshPhongMaterial) {
-               this.originalMaterials.set(m, {
-                 color: m.color.clone(),
-                 emissive: 'emissive' in m ? (m as THREE.MeshStandardMaterial).emissive?.clone() : undefined
-               });
+        const processMaterial = (m: THREE.Material) => {
+           if (m instanceof THREE.MeshStandardMaterial || m instanceof THREE.MeshBasicMaterial || m instanceof THREE.MeshPhongMaterial) {
+             this.originalMaterials.set(m, {
+               color: m.color.clone(),
+               emissive: 'emissive' in m ? (m as THREE.MeshStandardMaterial).emissive?.clone() : undefined
+             });
+
+             // Inject Leg Sway Shader
+             m.onBeforeCompile = (shader) => {
+               console.log("[Shader] Injecting Leg Sway for", m.name);
+               shader.uniforms.uTime = this.globalUniforms.uTime;
+               shader.uniforms.uSway = this.globalUniforms.uSway;
+               
+               shader.vertexShader = `
+                 uniform float uTime;
+                 uniform float uSway;
+               ` + shader.vertexShader;
+
+               // Inject motion logic
+               // SIMPLIFIED DEBUG LOGIC: Sway everything to verify system
+               const swayLogic = `
+                 #include <begin_vertex>
+                 
+                 // Force sway if uSway > 0
+                 // Use a mix of Y and Z for height to handle different model orientations
+                 float hVal = position.y + position.z; 
+                 
+                 float speed = 6.0;
+                 float amp = uSway * 0.15; // Base amplitude
+                 
+                 // Wavy motion
+                 float wave = sin(uTime * speed + hVal * 2.0);
+                 
+                 // Apply to X and Z (horizontal plane)
+                 transformed.x += wave * amp;
+                 transformed.z += cos(uTime * speed * 0.9 + hVal) * amp;
+               `;
+               
+               shader.vertexShader = shader.vertexShader.replace('#include <begin_vertex>', swayLogic);
+             };
+             
+             // Trigger recompile
+             m.needsUpdate = true;
+             // @ts-ignore
+             m.version = (m.version || 0) + 1; // Force recompile in newer Three.js
+
+             // Eye Detection (Twilight Sparkle)
+             // blinn8SG was identified as Eyes in our MTL analysis
+             if (m.name === 'blinn8SG' && m instanceof THREE.MeshStandardMaterial) {
+               this.eyeMaterial = m;
              }
-           });
+           }
+        };
+
+        if (Array.isArray(material)) {
+           material.forEach(processMaterial);
+        } else {
+           processMaterial(material);
         }
       }
     });
@@ -1051,15 +1155,37 @@ export class SplatViewer {
       const material = this.particleSystem.material as THREE.PointsMaterial;
       material.opacity = Math.max(0, energy * 1.0); // Full range
       material.size = 0.02 + energy * 0.18; // More dramatic size change
+      
+      // Custom Particle Colors
+      if (this.currentCharacter === 'twilight') {
+        material.color.setHex(0xcc88ff); // Magical Purple
+      } else if (this.currentCharacter === 'pinkie') {
+        material.color.setHex(0xffaaaa); // Party Pink
+      } else {
+        material.color.setHex(0xffdd88); // Default Gold
+      }
     }
 
     // 3. Update Model Colors
     // 0% energy = Dark Grey (0x222222) -> More dramatic "dead" look
     const greyColor = new THREE.Color(0x222222);
+    const targetColor = new THREE.Color();
+    const hsl = { h: 0, s: 0, l: 0 };
     
     this.originalMaterials.forEach((original, material) => {
+      // Calculate target color (Original or Boosted)
+      targetColor.copy(original.color);
+      
+      if (this.currentCharacter === 'twilight' && energy > 0.8) {
+        // Boost Saturation for Twilight at high energy
+        targetColor.getHSL(hsl);
+        hsl.s = Math.min(1.0, hsl.s * 1.5); 
+        hsl.l = Math.min(1.0, hsl.l * 1.1);
+        targetColor.setHSL(hsl.h, hsl.s, hsl.l);
+      }
+
       // Lerp color
-      material.color.copy(original.color).lerp(greyColor, 1 - energy);
+      material.color.copy(targetColor).lerp(greyColor, 1 - energy);
       
       // Handle emissive
       if ('emissive' in material && original.emissive) {
@@ -1070,9 +1196,8 @@ export class SplatViewer {
 
     // 4. Update Transform (Scale & Height)
     if (this.model) {
-      // Scale: 0.5 to 1.0 (Dramatic shrink)
-      const scaleFactor = 0.5 + energy * 0.5;
-      this.model.scale.copy(this.baseScale).multiplyScalar(scaleFactor);
+      // Scale: Keep base scale (no energy scaling)
+      this.model.scale.copy(this.baseScale);
       
       // Height: Drop down
       // Z is Up. Drop by 0.5 units at 0 energy
@@ -1080,6 +1205,12 @@ export class SplatViewer {
       this.model.position.copy(this.basePosition);
       this.model.position.z += zOffset;
     }
+    
+    // 5. Update Sway
+    // Sway intensity scaled up for visibility
+    // Model max dim is 10, so we need larger sway
+    this.globalUniforms.uSway.value = Math.max(0, (energy - 0.1) * 2.0);
+    // console.log("Energy:", energy.toFixed(3), "Sway:", this.globalUniforms.uSway.value.toFixed(3));
     
     this.requestRender();
   }
