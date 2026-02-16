@@ -6,7 +6,7 @@ import { usePonyCare } from "./composables/usePonyCare";
 const { container, fileInput, triggerFileSelect, handleFileSelect, resetView, loadTwilightSparkle, loadPinkiePie, updateEnergy, setViewMode } = useSplatViewer();
 const { energy } = usePonyCare();
 
-const isQuadMode = ref(true);
+const isQuadMode = ref(false);
 const toggleViewMode = () => {
   isQuadMode.value = !isQuadMode.value;
   setViewMode(isQuadMode.value ? 'quad' : 'single');

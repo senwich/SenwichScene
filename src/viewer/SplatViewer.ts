@@ -56,7 +56,8 @@ export class SplatViewer {
   private globalUniforms = {
     uTime: { value: 0 },
     uEnergy: { value: 0 },
-    uSway: { value: 0 }
+    uSway: { value: 0 },
+    uCharacterType: { value: 0 } // 0: unknown, 1: twilight, 2: pinkie
   };
 
   private readonly initialCameraDirection = new THREE.Vector3(0.75, 0.35, 1).normalize();
@@ -128,8 +129,8 @@ export class SplatViewer {
 
     this.initParticles();
 
-    this.setupQuadViews();
-    // Default to quad views
+    this.setupSingleView();
+    // Default to single view
     
     this.syncRendererSize();
     this.orbitTarget.copy(this.defaultTarget);
@@ -622,12 +623,25 @@ export class SplatViewer {
     for (const view of this.views) {
       this.tempSpherical.copy(this.spherical);
       this.tempSpherical.theta += view.thetaOffset;
-      setVectorFromOrbit(this.tempSpherical, this.cameraOffset).add(this.orbitTarget);
-      view.camera.position.copy(this.cameraOffset);
-      
-      // Reset up vector and look at target
-      view.camera.up.set(0, 0, 1);
-      view.camera.lookAt(this.orbitTarget);
+
+      if (view === this.primaryView) {
+        // For primary view, we trust the camera's rotation (set by rotateCamera) to be exact.
+        // We only apply the radius (zoom) from spherical to allow damping.
+        // overwriting position from spherical would cause jitter due to lossy Pos->Spherical->Pos conversion.
+        const currentDir = new THREE.Vector3().copy(view.camera.position).sub(this.orbitTarget).normalize();
+        if (currentDir.lengthSq() > 0.0001) { // Avoid zero vector
+           view.camera.position.copy(this.orbitTarget).add(currentDir.multiplyScalar(this.spherical.radius));
+           // No lookAt() needed - orientation is preserved from rotateCamera
+        }
+      } else {
+        // Quad views follow the spherical coordinates strictly
+        setVectorFromOrbit(this.tempSpherical, this.cameraOffset).add(this.orbitTarget);
+        view.camera.position.copy(this.cameraOffset);
+        
+        // Reset up vector and look at target
+        view.camera.up.set(0, 0, 1);
+        view.camera.lookAt(this.orbitTarget);
+      }
       
       // Apply screen space rotation (Roll) around the local Z axis
       if (view.screenRotation !== 0) {
@@ -636,17 +650,56 @@ export class SplatViewer {
     }
   }
 
+  /**
+   * Rotate camera using Quaternions to allow free rotation through poles.
+   * Updates Position and Up-vector, then syncs Spherical state.
+   */
+  private rotateCamera(dTheta: number, dPhi: number) {
+    const camera = this.primaryView.camera;
+    const offset = new THREE.Vector3().copy(camera.position).sub(this.orbitTarget);
+
+    // 1. Yaw (horizontal) around World Z
+    // Note: dTheta is usually negative for drag-left
+    const quatYaw = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), dTheta);
+    offset.applyQuaternion(quatYaw);
+    camera.up.applyQuaternion(quatYaw);
+
+    // 2. Pitch (vertical) around Camera Right
+    // Right = Forward x Up. Forward = -offset
+    const forward = offset.clone().negate().normalize();
+    const right = new THREE.Vector3().crossVectors(forward, camera.up).normalize();
+    
+    const quatPitch = new THREE.Quaternion().setFromAxisAngle(right, dPhi);
+    offset.applyQuaternion(quatPitch);
+    camera.up.applyQuaternion(quatPitch);
+
+    // Apply
+    camera.position.copy(this.orbitTarget).add(offset);
+    camera.lookAt(this.orbitTarget);
+
+    // Sync spherical state (for other logic) - phi will be wrapped to [0, pi] automatically
+    // but that's fine since we drive motion from Camera now.
+    setOrbitFromVector(this.spherical, offset);
+    this.sphericalGoal.copy(this.spherical);
+  }
+
   private updateCamera(immediate = false) {
     this.sphericalGoal.radius = THREE.MathUtils.clamp(
       this.sphericalGoal.radius,
       this.minDistance,
       this.maxDistance
     );
-    this.sphericalGoal.phi = THREE.MathUtils.clamp(
-      this.sphericalGoal.phi,
-      this.minPolarAngle,
-      this.maxPolarAngle
-    );
+    // Wrap phi through poles (reflect + theta shift) so vertical rotation is never stuck
+    while (this.sphericalGoal.phi < this.minPolarAngle || this.sphericalGoal.phi > this.maxPolarAngle) {
+      if (this.sphericalGoal.phi < this.minPolarAngle) {
+        this.sphericalGoal.phi = 2 * this.minPolarAngle - this.sphericalGoal.phi;
+        this.sphericalGoal.theta += Math.PI;
+      }
+      if (this.sphericalGoal.phi > this.maxPolarAngle) {
+        this.sphericalGoal.phi = 2 * this.maxPolarAngle - this.sphericalGoal.phi;
+        this.sphericalGoal.theta += Math.PI;
+      }
+    }
 
     if (immediate) {
       this.spherical.copy(this.sphericalGoal);
@@ -665,7 +718,7 @@ export class SplatViewer {
       }
     }
 
-    this.spherical.makeSafe();
+    // Note: removed makeSafe() to avoid re-clamping phi after pole wrapping
 
     this.prevCameraPosition.copy(this.primaryView.camera.position);
     this.prevCameraQuaternion.copy(this.primaryView.camera.quaternion);
@@ -761,14 +814,8 @@ export class SplatViewer {
 
     // Apply inertia velocity (constant angular velocity, no friction)
     if (this.isSpinning && !this.pointerState.isDragging) {
-      this.sphericalGoal.theta += this.velocityTheta;
-      this.sphericalGoal.phi += this.velocityPhi;
-      // Clamp phi to prevent flipping
-      this.sphericalGoal.phi = THREE.MathUtils.clamp(
-        this.sphericalGoal.phi,
-        this.minPolarAngle,
-        this.maxPolarAngle
-      );
+      // Use quaternion rotation for frictionless inertia
+      this.rotateCamera(this.velocityTheta, this.velocityPhi);
     }
 
     const cameraChanged = this.updateCamera();
@@ -827,39 +874,19 @@ export class SplatViewer {
     this.pointerState.lastY = event.clientY;
     this.pointerState.lastTime = now;
 
-    const absX = Math.abs(deltaX);
-    const absY = Math.abs(deltaY);
-
-    if (!this.pointerState.axisLock) {
-      if (absX > absY * this.axisLockThreshold) {
-        this.pointerState.axisLock = "horizontal";
-      } else if (absY > absX * this.axisLockThreshold) {
-        this.pointerState.axisLock = "vertical";
-      }
-    }
-
     // Calculate angular change
     const dTheta = -deltaX * this.rotateSpeed;
     const dPhi = -deltaY * this.rotateSpeed;
 
+    // Rotate camera directly (free orbit)
+    this.rotateCamera(dTheta, dPhi);
+
     // Update velocity (smoothed, convert to rad/frame at ~16.67ms per frame)
     const frameTime = 16.67;
     const velocitySmooth = 0.3;
-    if (this.pointerState.axisLock === "horizontal") {
-      this.sphericalGoal.theta += dTheta;
-      this.velocityTheta = this.velocityTheta * (1 - velocitySmooth) + (dTheta / dt) * frameTime * velocitySmooth;
-      this.velocityPhi = 0;
-    } else if (this.pointerState.axisLock === "vertical") {
-      this.sphericalGoal.phi += dPhi;
-      this.velocityPhi = this.velocityPhi * (1 - velocitySmooth) + (dPhi / dt) * frameTime * velocitySmooth;
-      this.velocityTheta = 0;
-    } else {
-      this.sphericalGoal.theta += dTheta;
-      this.sphericalGoal.phi += dPhi;
-      this.velocityTheta = this.velocityTheta * (1 - velocitySmooth) + (dTheta / dt) * frameTime * velocitySmooth;
-      this.velocityPhi = this.velocityPhi * (1 - velocitySmooth) + (dPhi / dt) * frameTime * velocitySmooth;
-    }
-
+    this.velocityTheta = this.velocityTheta * (1 - velocitySmooth) + (dTheta / dt) * frameTime * velocitySmooth;
+    this.velocityPhi = this.velocityPhi * (1 - velocitySmooth) + (dPhi / dt) * frameTime * velocitySmooth;
+    
     event.preventDefault();
     this.requestRender();
   };
@@ -1000,6 +1027,7 @@ export class SplatViewer {
     const geometry = new THREE.BufferGeometry();
     const positions = new Float32Array(particleCount * 3);
     const velocities = new Float32Array(particleCount);
+    const seeds = new Float32Array(particleCount);
 
     for (let i = 0; i < particleCount; i++) {
       // Random position in a sphere/shell
@@ -1012,18 +1040,109 @@ export class SplatViewer {
       positions[i * 3 + 2] = r * Math.cos(phi);
       
       velocities[i] = (Math.random() - 0.5) * 2; // Random orbit speed
+      seeds[i] = Math.random();
     }
 
     geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+    geometry.setAttribute('seed', new THREE.BufferAttribute(seeds, 1));
     this.particleVelocities = velocities;
 
     const texture = this.createParticleTexture();
-    const material = new THREE.PointsMaterial({
-      color: 0xffdd88, // Warm magical glow
-      size: 0.15,
-      map: texture,
+    const material = new THREE.ShaderMaterial({
+      uniforms: {
+        uTime: this.globalUniforms.uTime,
+        uEnergy: this.globalUniforms.uEnergy,
+        uCharacterType: this.globalUniforms.uCharacterType,
+        uTexture: { value: texture },
+        uPointSize: { value: 0.15 }
+      },
+      vertexShader: `
+        uniform float uTime;
+        uniform float uEnergy;
+        uniform float uCharacterType;
+        uniform float uPointSize;
+        attribute float seed;
+        varying float vSeed;
+
+        void main() {
+          vSeed = seed;
+          vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+          
+          // Size scales with energy
+          float size = uPointSize * (0.2 + uEnergy * 1.5);
+          gl_PointSize = size * (300.0 / -mvPosition.z);
+          gl_Position = projectionMatrix * mvPosition;
+        }
+      `,
+      fragmentShader: `
+        uniform float uTime;
+        uniform float uEnergy;
+        uniform float uCharacterType;
+        uniform sampler2D uTexture;
+        varying float vSeed;
+
+        // HSV to RGB helper
+        vec3 hsv2rgb(vec3 c) {
+          vec4 K = vec4(1.0, 2.0 / 3.0, 1.0 / 3.0, 3.0);
+          vec3 p = abs(fract(c.xxx + K.xyz) * 6.0 - K.www);
+          return c.z * mix(K.xxx, clamp(p - K.xxx, 0.0, 1.0), c.y);
+        }
+
+        // Pseudo-random hash for firefly flicker
+        float hash(float n) {
+          return fract(sin(n) * 43758.5453123);
+        }
+
+        void main() {
+          vec4 texColor = texture2D(uTexture, gl_PointCoord);
+          if (texColor.a < 0.01) discard;
+
+          vec3 baseColor;
+          
+          if (uCharacterType == 1.0) {
+            // Twilight: Purple
+            baseColor = vec3(0.66, 0.0, 1.0); 
+          } else if (uCharacterType == 2.0) {
+            // Pinkie Pie: Each particle has its own random, continuously changing color
+            // Multiple overlapping sine waves at different frequencies
+            // create a more "random" feel for each particle
+            float h1 = hash(vSeed * 17.3);
+            float h2 = hash(vSeed * 31.7);
+            float hue = fract(
+              h1 
+              + sin(uTime * (0.5 + h2 * 1.5)) * 0.3 
+              + sin(uTime * (0.23 + h1 * 0.7) + 2.0) * 0.2
+            );
+            baseColor = hsv2rgb(vec3(hue, 0.85, 1.0));
+          } else {
+            // Default: Warm Gold
+            baseColor = vec3(1.0, 0.8, 0.5);
+          }
+
+          // Firefly flickering: each particle oscillates independently
+          // Use multiple sine waves at unique frequencies per particle
+          float f1 = hash(vSeed * 7.13);
+          float f2 = hash(vSeed * 13.37);
+          float f3 = hash(vSeed * 23.71);
+          float flicker = 0.5 
+            + 0.25 * sin(uTime * (2.0 + f1 * 4.0) + f2 * 6.283)
+            + 0.15 * sin(uTime * (3.5 + f3 * 3.0) + f1 * 6.283)
+            + 0.10 * sin(uTime * (1.0 + f2 * 2.0) + f3 * 6.283);
+          // Clamp to [0.05, 1.0]
+          flicker = clamp(flicker, 0.05, 1.0);
+
+          // Max brightness scales with energy
+          // flicker modulates between near-0 and (0.3 + uEnergy * 2.0)
+          float maxBrightness = 0.3 + uEnergy * 2.0;
+          float brightness = flicker * maxBrightness;
+          
+          // Alpha also uses energy so particles fade in as energy grows
+          float alpha = texColor.a * uEnergy * flicker;
+          
+          gl_FragColor = vec4(baseColor * brightness, alpha);
+        }
+      `,
       transparent: true,
-      opacity: 0, // Start invisible
       depthWrite: false,
       blending: THREE.AdditiveBlending,
     });
@@ -1081,44 +1200,118 @@ export class SplatViewer {
                emissive: 'emissive' in m ? (m as THREE.MeshStandardMaterial).emissive?.clone() : undefined
              });
 
-             // Inject Leg Sway Shader
+             // Inject Leg Sway Shader & Saturation Boost
              m.onBeforeCompile = (shader) => {
-               console.log("[Shader] Injecting Leg Sway for", m.name);
+               // Link uniforms object reference
                shader.uniforms.uTime = this.globalUniforms.uTime;
                shader.uniforms.uSway = this.globalUniforms.uSway;
+               shader.uniforms.uEnergy = this.globalUniforms.uEnergy;
                
-               shader.vertexShader = `
-                 uniform float uTime;
-                 uniform float uSway;
-               ` + shader.vertexShader;
+               // Inject Uniforms definition (Vertex)
+               if (shader.vertexShader.includes('#include <common>')) {
+                  shader.vertexShader = shader.vertexShader.replace('#include <common>', `
+                    #include <common>
+                    uniform float uTime;
+                    uniform float uSway;
+                  `);
+               } else {
+                  shader.vertexShader = `
+                    uniform float uTime;
+                    uniform float uSway;
+                  ` + shader.vertexShader;
+               }
 
                // Inject motion logic
-               // SIMPLIFIED DEBUG LOGIC: Sway everything to verify system
                const swayLogic = `
                  #include <begin_vertex>
                  
-                 // Force sway if uSway > 0
-                 // Use a mix of Y and Z for height to handle different model orientations
-                 float hVal = position.y + position.z; 
+                 // Leg Sway Logic
+                 // Use local Y
+                 float hVal = position.y; 
                  
-                 float speed = 6.0;
-                 float amp = uSway * 0.15; // Base amplitude
+                 // Normalize height relative to model
+                 float minH = ${minY.toFixed(2)};
+                 float maxH = ${bbox.max.y.toFixed(2)};
+                 float totalH = max(maxH - minH, 0.01);
                  
-                 // Wavy motion
-                 float wave = sin(uTime * speed + hVal * 2.0);
+                 float relH = (hVal - minH) / totalH;
                  
-                 // Apply to X and Z (horizontal plane)
-                 transformed.x += wave * amp;
-                 transformed.z += cos(uTime * speed * 0.9 + hVal) * amp;
+                 // Weight: 1.0 at bottom, 0.0 at top (bottom 40%)
+                 float weight = 1.0 - smoothstep(0.0, 0.4, relH);
+                 
+                 // Only sway if energy/sway is present
+                 if (weight > 0.01) {
+                   float speed = 5.0;
+                   float amp = uSway * 0.15; 
+                   
+                   // Sway motion
+                   float wave = sin(uTime * speed + hVal * 2.0);
+                   float waveZ = cos(uTime * speed * 0.8 + hVal * 2.0);
+                   
+                   transformed.x += wave * weight * amp;
+                   transformed.z += waveZ * weight * amp * 0.5;
+                 }
                `;
                
                shader.vertexShader = shader.vertexShader.replace('#include <begin_vertex>', swayLogic);
+
+               // Inject Fragment Shader Logic for Saturation
+               const fragUniforms = `
+                 uniform float uEnergy;
+               `;
+               
+               if (shader.fragmentShader.includes('#include <common>')) {
+                 shader.fragmentShader = shader.fragmentShader.replace('#include <common>', `
+                   #include <common>
+                   ${fragUniforms}
+                 `);
+               } else {
+                 shader.fragmentShader = fragUniforms + shader.fragmentShader;
+               }
+
+               // Saturation Boost Logic
+               // Replaces dithering_fragment to apply at end of pipeline
+               const saturationLogic = `
+                 #include <dithering_fragment>
+                 
+                 // Vivid Saturation Logic
+                 vec3 lumaWeights = vec3(0.299, 0.587, 0.114);
+                 vec3 finalCol = gl_FragColor.rgb;
+                 float luminance = dot(finalCol, lumaWeights);
+                 vec3 greyScaleColor = vec3(luminance);
+                 
+                 // Saturation Factor
+                 // 0.0 energy -> 0.0 saturation (Greyscale)
+                 // 1.0 energy -> 1.4 saturation (Vivid but natural)
+                 float sat = uEnergy * 1.4;
+                 
+                 // Apply saturation
+                 // Use a better luminance weight for perception
+                 vec3 balancedLuma = vec3(0.2126, 0.7152, 0.0722);
+                 vec3 mixedColor = mix(vec3(dot(finalCol, balancedLuma)), finalCol, sat);
+                 
+                 // Vibrance/Pop
+                 // Boost colors that are already colored (preserve whites/greys somewhat to avoid tinting teeth/eyes weirdly)
+                 // But for "Pure" look, we just apply the mix.
+                 
+                 gl_FragColor.rgb = mixedColor;
+                 
+                 // Brightness/Exposure adjustment
+                 // 0.0 energy -> 0.3 brightness (Dim)
+                 // 1.0 energy -> 1.1 brightness (Bright & Pop)
+                 gl_FragColor.rgb *= (0.3 + uEnergy * 0.8);
+                 
+                 // Subtle Contrast boost to avoid "Greyish" wash
+                 gl_FragColor.rgb = (gl_FragColor.rgb - 0.5) * (1.0 + uEnergy * 0.1) + 0.5;
+               `;
+               
+               shader.fragmentShader = shader.fragmentShader.replace('#include <dithering_fragment>', saturationLogic);
              };
              
              // Trigger recompile
              m.needsUpdate = true;
              // @ts-ignore
-             m.version = (m.version || 0) + 1; // Force recompile in newer Three.js
+             m.version = (m.version || 0) + 1;
 
              // Eye Detection (Twilight Sparkle)
              // blinn8SG was identified as Eyes in our MTL analysis
@@ -1141,34 +1334,28 @@ export class SplatViewer {
 
   updateEnergy(energy: number) {
     this.currentEnergy = energy;
+    this.globalUniforms.uEnergy.value = energy;
     
     // 1. Update Lighting
-    // Base ambient: 0.1 -> 0.6 (Stronger contrast)
-    this.ambientLight.intensity = 0.1 + energy * 0.5;
-    // Directional lights: very dim -> bright
-    this.directionalLight1.intensity = 0.1 + energy * 0.9;
-    this.directionalLight2.intensity = 0.0 + energy * 0.4;
-    this.directionalLight3.intensity = 0.0 + energy * 0.3;
+    // Base ambient: 0.2 -> 0.9 (Bright, remove grey shadows)
+    this.ambientLight.intensity = 0.2 + energy * 0.7;
+    // Directional lights: Strong, clear light
+    this.directionalLight1.intensity = 0.4 + energy * 1.2;
+    this.directionalLight2.intensity = 0.1 + energy * 0.6;
+    this.directionalLight3.intensity = 0.1 + energy * 0.4;
 
     // 2. Update Particles
     if (this.particleSystem) {
-      const material = this.particleSystem.material as THREE.PointsMaterial;
-      material.opacity = Math.max(0, energy * 1.0); // Full range
-      material.size = 0.02 + energy * 0.18; // More dramatic size change
-      
-      // Custom Particle Colors
       if (this.currentCharacter === 'twilight') {
-        material.color.setHex(0xcc88ff); // Magical Purple
+        this.globalUniforms.uCharacterType.value = 1.0;
       } else if (this.currentCharacter === 'pinkie') {
-        material.color.setHex(0xffaaaa); // Party Pink
+        this.globalUniforms.uCharacterType.value = 2.0;
       } else {
-        material.color.setHex(0xffdd88); // Default Gold
+        this.globalUniforms.uCharacterType.value = 0.0;
       }
     }
 
-    // 3. Update Model Colors
-    // 0% energy = Dark Grey (0x222222) -> More dramatic "dead" look
-    const greyColor = new THREE.Color(0x222222);
+    // 3. Update Model Colors (Tint only, Greyscale/Saturation handled by Shader)
     const targetColor = new THREE.Color();
     const hsl = { h: 0, s: 0, l: 0 };
     
@@ -1176,16 +1363,23 @@ export class SplatViewer {
       // Calculate target color (Original or Boosted)
       targetColor.copy(original.color);
       
-      if (this.currentCharacter === 'twilight' && energy > 0.8) {
-        // Boost Saturation for Twilight at high energy
-        targetColor.getHSL(hsl);
-        hsl.s = Math.min(1.0, hsl.s * 1.5); 
-        hsl.l = Math.min(1.0, hsl.l * 1.1);
-        targetColor.setHSL(hsl.h, hsl.s, hsl.l);
-      }
+      // Global Saturation & Brightness Boost for Tint
+      targetColor.getHSL(hsl);
+      
+      // Boost tint saturation to support the shader's boost
+      // Pure Color: High Saturation
+      const saturationBoost = 1.0 + energy * 0.5;
+      hsl.s = Math.min(1.0, hsl.s * saturationBoost);
+      
+      // Lightness: Boost slightly for "Energy"
+      // Remove the darkening logic
+      const lightnessBoost = 1.0 + energy * 0.15;
+      hsl.l = Math.min(1.0, hsl.l * lightnessBoost);
+      
+      targetColor.setHSL(hsl.h, hsl.s, hsl.l);
 
-      // Lerp color
-      material.color.copy(targetColor).lerp(greyColor, 1 - energy);
+      // Apply tint
+      material.color.copy(targetColor);
       
       // Handle emissive
       if ('emissive' in material && original.emissive) {
@@ -1207,10 +1401,8 @@ export class SplatViewer {
     }
     
     // 5. Update Sway
-    // Sway intensity scaled up for visibility
-    // Model max dim is 10, so we need larger sway
-    this.globalUniforms.uSway.value = Math.max(0, (energy - 0.1) * 2.0);
-    // console.log("Energy:", energy.toFixed(3), "Sway:", this.globalUniforms.uSway.value.toFixed(3));
+    // Sway intensity: 0.0 -> 2.0
+    this.globalUniforms.uSway.value = energy * 2.0;
     
     this.requestRender();
   }
