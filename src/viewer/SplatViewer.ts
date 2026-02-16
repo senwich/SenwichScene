@@ -1054,7 +1054,9 @@ export class SplatViewer {
         uEnergy: this.globalUniforms.uEnergy,
         uCharacterType: this.globalUniforms.uCharacterType,
         uTexture: { value: texture },
-        uPointSize: { value: 0.15 }
+        uPointSize: { value: 0.3 },
+        // Adjust this value to change breathing speed globally (Default: 2.5)
+        uBreathSpeed: { value: 10  }
       },
       vertexShader: `
         uniform float uTime;
@@ -1078,6 +1080,7 @@ export class SplatViewer {
         uniform float uTime;
         uniform float uEnergy;
         uniform float uCharacterType;
+        uniform float uBreathSpeed; // Controls breathing speed
         uniform sampler2D uTexture;
         varying float vSeed;
 
@@ -1103,41 +1106,41 @@ export class SplatViewer {
             // Twilight: Purple
             baseColor = vec3(0.66, 0.0, 1.0); 
           } else if (uCharacterType == 2.0) {
-            // Pinkie Pie: Each particle has its own random, continuously changing color
-            // Multiple overlapping sine waves at different frequencies
-            // create a more "random" feel for each particle
-            float h1 = hash(vSeed * 17.3);
-            float h2 = hash(vSeed * 31.7);
-            float hue = fract(
-              h1 
-              + sin(uTime * (0.5 + h2 * 1.5)) * 0.3 
-              + sin(uTime * (0.23 + h1 * 0.7) + 2.0) * 0.2
-            );
-            baseColor = hsv2rgb(vec3(hue, 0.85, 1.0));
+            // Pinkie Pie: Each particle independently switches between 7 rainbow colors
+            // Each particle has its own switching rate and phase (i.i.d. random)
+            float rate = 1.0 + hash(vSeed * 7.0) * 4.0;   // 1–5 Hz per particle
+            float phase = hash(vSeed * 13.0) * 100.0;      // random phase offset
+            float timeSlot = floor(uTime * rate + phase);
+            float rnd = hash(timeSlot + vSeed * 1000.0);   // large spread for decorrelation
+            
+            // Quantize to 7 hues: Red, Orange, Yellow, Green, Cyan, Blue, Violet
+            float hue = floor(rnd * 7.0) / 7.0;
+            baseColor = hsv2rgb(vec3(hue, 1.0, 1.0));
           } else {
             // Default: Warm Gold
             baseColor = vec3(1.0, 0.8, 0.5);
           }
 
-          // Firefly flickering: each particle oscillates independently
-          // Use multiple sine waves at unique frequencies per particle
-          float f1 = hash(vSeed * 7.13);
-          float f2 = hash(vSeed * 13.37);
-          float f3 = hash(vSeed * 23.71);
-          float flicker = 0.5 
-            + 0.25 * sin(uTime * (2.0 + f1 * 4.0) + f2 * 6.283)
-            + 0.15 * sin(uTime * (3.5 + f3 * 3.0) + f1 * 6.283)
-            + 0.10 * sin(uTime * (1.0 + f2 * 2.0) + f3 * 6.283);
-          // Clamp to [0.05, 1.0]
-          flicker = clamp(flicker, 0.05, 1.0);
-
-          // Max brightness scales with energy
-          // flicker modulates between near-0 and (0.3 + uEnergy * 2.0)
-          float maxBrightness = 0.3 + uEnergy * 2.0;
-          float brightness = flicker * maxBrightness;
+          // Firefly breathing: each particle fades in and out independently
+          // Smooth sine wave instead of erratic flicker
+          // Rate: modulated by uBreathSpeed
+          float breathRate = 0.8 + hash(vSeed * 33.3) * 1.2;
+          float breathPhase = hash(vSeed * 55.5) * 10.0;
           
-          // Alpha also uses energy so particles fade in as energy grows
-          float alpha = texColor.a * uEnergy * flicker;
+          // Full range sine wave [0, 1], speed controlled by uBreathSpeed
+          float breathRaw = 0.5 + 0.5 * sin(uTime * uBreathSpeed * breathRate + breathPhase);
+          
+          // Apply power curve to make "on" pulses more distinct against "off"
+          // breath^2 makes the low values lower and high values sharper
+          float breath = breathRaw * breathRaw;
+
+          // Max brightness scales with energy much more aggressively
+          // Base brightness 0.5 (was 0.3), max energy multiplier 5.0 (was 2.0)
+          float maxBrightness = 0.5 + uEnergy * 5.0;
+          float brightness = breath * maxBrightness;
+          
+          // Alpha also breathed, so they disappear completely at low point
+          float alpha = texColor.a * clamp(uEnergy * 2.0, 0.0, 1.0) * breath;
           
           gl_FragColor = vec4(baseColor * brightness, alpha);
         }
