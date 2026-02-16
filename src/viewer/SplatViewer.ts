@@ -748,7 +748,10 @@ export class SplatViewer {
 
   private renderLoop = () => {
     // Update Uniforms
-    const time = Date.now() * 0.001;
+    // Use performance.now() instead of Date.now() for GPU float precision.
+    // Date.now()*0.001 gives ~1.7e9 which exceeds 32-bit float precision (~7 digits),
+    // causing spatial noise functions in shaders to produce uniform values.
+    const time = performance.now() * 0.001;
     this.globalUniforms.uTime.value = time;
     
     // Animate Eyes (Twilight)
@@ -778,7 +781,7 @@ export class SplatViewer {
     if (this.particleSystem && this.particleVelocities) {
       const positions = this.particleSystem.geometry.attributes.position.array as Float32Array;
       const count = positions.length / 3;
-      const time = Date.now() * 0.001;
+      const time = performance.now() * 0.001;
       
       // Speed scales with energy
       const speedScale = 0.2 + this.currentEnergy * 0.8;
@@ -1103,8 +1106,9 @@ export class SplatViewer {
           vec3 baseColor;
           
           if (uCharacterType == 1.0) {
-            // Twilight: Purple
-            baseColor = vec3(0.66, 0.0, 1.0); 
+            // Twilight: Ultra-saturated Magical Purple
+            // Hue 0.78 (Purple/Violet), Saturation 1.0 (Pure), Value 1.5 (HDR/Neon)
+            baseColor = hsv2rgb(vec3(0.78, 1.0, 1.5)); 
           } else if (uCharacterType == 2.0) {
             // Pinkie Pie: Each particle independently switches between 7 rainbow colors
             // Each particle has its own switching rate and phase (i.i.d. random)
@@ -1135,10 +1139,29 @@ export class SplatViewer {
           float breath = breathRaw * breathRaw;
 
           // Max brightness scales with energy much more aggressively
-          // Base brightness 0.5 (was 0.3), max energy multiplier 5.0 (was 2.0)
           float maxBrightness = 0.5 + uEnergy * 5.0;
           float brightness = breath * maxBrightness;
           
+          // --- Magic Spark Effect for Twilight ---
+          if (uCharacterType == 1.0) {
+             // Create "clusters" of sparks: occasional high-frequency bursts
+             // Main spark trigger
+             float sparkTime = uTime * (uBreathSpeed * 2.0) + vSeed * 500.0;
+             // Sharp spike function
+             float spark = pow(max(0.0, sin(sparkTime)), 30.0);
+             
+             // Modulate sparks to happen in clusters over time
+             float cluster = 0.5 + 0.5 * sin(uTime * 0.5 + vSeed * 10.0);
+             
+             if (cluster > 0.7) { // Only spark during active cluster phases
+                 brightness += spark * 8.0; // Intense burst
+                 
+                 // Whiten the core of the spark (magic glow)
+                 float whitener = clamp(spark * 0.8, 0.0, 1.0);
+                 baseColor = mix(baseColor, vec3(1.5, 1.2, 1.5), whitener);
+             }
+          }
+
           // Alpha also breathed, so they disappear completely at low point
           float alpha = texColor.a * clamp(uEnergy * 2.0, 0.0, 1.0) * breath;
           
@@ -1211,20 +1234,23 @@ export class SplatViewer {
                shader.uniforms.uEnergy = this.globalUniforms.uEnergy;
                
                // Inject Uniforms definition (Vertex)
+               // Also add vWorldPositionCustom for Cloud Shadows
                if (shader.vertexShader.includes('#include <common>')) {
                   shader.vertexShader = shader.vertexShader.replace('#include <common>', `
                     #include <common>
                     uniform float uTime;
                     uniform float uSway;
+                    varying vec3 vWorldPositionCustom;
                   `);
                } else {
                   shader.vertexShader = `
                     uniform float uTime;
                     uniform float uSway;
+                    varying vec3 vWorldPositionCustom;
                   ` + shader.vertexShader;
                }
 
-               // Inject motion logic
+               // Inject motion logic (and calculate world pos)
                const swayLogic = `
                  #include <begin_vertex>
                  
@@ -1254,13 +1280,18 @@ export class SplatViewer {
                    transformed.x += wave * weight * amp;
                    transformed.z += waveZ * weight * amp * 0.5;
                  }
+                 
+                 // Calculate World Position for Cloud Shadows
+                 vWorldPositionCustom = (modelMatrix * vec4(transformed, 1.0)).xyz;
                `;
                
                shader.vertexShader = shader.vertexShader.replace('#include <begin_vertex>', swayLogic);
 
-               // Inject Fragment Shader Logic for Saturation
+               // Inject Fragment Shader Logic for Saturation & Cloud Shadows
                const fragUniforms = `
                  uniform float uEnergy;
+                 uniform float uTime;
+                 varying vec3 vWorldPositionCustom;
                `;
                
                if (shader.fragmentShader.includes('#include <common>')) {
@@ -1271,6 +1302,34 @@ export class SplatViewer {
                } else {
                  shader.fragmentShader = fragUniforms + shader.fragmentShader;
                }
+
+               // Cloud Shadow Logic (Modulates Diffuse Color)
+               // Moving noise pattern simulating light filtering through clouds
+               const cloudLogic = `
+                 #include <color_fragment>
+                 
+                 // Cloud Shadow / Light Spot Effect
+                 // Large-scale noise for dramatic light patches
+                 vec3 cPos = vWorldPositionCustom * 0.5; // Larger scale = bigger spots
+                 float cTime = uTime * 0.3; // Slow drift
+                 
+                 // Multi-octave sine interference for organic shapes
+                 float n1 = sin(cPos.x * 1.0 + cTime) * cos(cPos.y * 0.7 - cTime * 0.4) * sin(cPos.z * 0.9 + cTime * 0.2);
+                 float n2 = sin(cPos.x * 2.3 - cTime * 0.8) * cos(cPos.z * 1.8 + cTime * 0.6);
+                 float n3 = sin(cPos.y * 1.5 + cTime * 0.5) * cos(cPos.x * 1.2 - cTime * 0.3);
+                 
+                 // Combine octaves
+                 float cloudNoise = (n1 + n2 * 0.5 + n3 * 0.3) / 1.8;
+                 
+                 // Dramatic light/shadow contrast
+                 // Range: 0.3 (deep shadow) to 1.7 (bright spotlight)
+                 float lightIntensity = 0.3 + 1.4 * smoothstep(-0.4, 0.4, cloudNoise);
+                 
+                 // Apply to diffuse color (base color)
+                 diffuseColor.rgb *= lightIntensity;
+               `;
+               
+               shader.fragmentShader = shader.fragmentShader.replace('#include <color_fragment>', cloudLogic);
 
                // Saturation Boost Logic
                // Replaces dithering_fragment to apply at end of pipeline
