@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { SplatMesh } from "@sparkjsdev/spark";
 import { OBJLoader } from "three-stdlib";
-import { MTLLoader } from "three-stdlib";
+import { MTLLoader, MaterialCreator } from "three-stdlib";
 import { setOrbitFromVector, setVectorFromOrbit } from "./orbitMath";
 
 type AxisLock = "horizontal" | "vertical" | null;
@@ -24,9 +24,9 @@ export class SplatViewer {
     powerPreference: "high-performance",
   });
 
-  private views: ViewConfig[];
+  private views!: ViewConfig[];
   private readonly viewByPosition = new Map<ViewPosition, ViewConfig>();
-  private primaryView: ViewConfig;
+  private primaryView!: ViewConfig;
 
   private container: HTMLDivElement | null = null;
   private viewport: HTMLCanvasElement | null = null;
@@ -103,7 +103,7 @@ export class SplatViewer {
   private readonly maxDistance = 50;
   private readonly minPolarAngle = 0.02;
   private readonly maxPolarAngle = Math.PI - 0.02;
-  private readonly axisLockThreshold = 1.5;
+
 
   constructor() {
     const pixelRatio = Math.min(window.devicePixelRatio ?? 1, 1.6);
@@ -189,7 +189,7 @@ export class SplatViewer {
         height: 1,
       }, 0) // No rotation
     ];
-    this.primaryView = this.views[0];
+    this.primaryView = this.views[0]!;
     this.syncRendererSize();
   }
 
@@ -364,10 +364,10 @@ export class SplatViewer {
 
       // Check if the OBJ file references an MTL file
       const mtlMatch = objText.match(/^mtllib\s+(.+)$/m);
-      let materials: MTLLoader.MaterialCreator | undefined;
+      let materials: MaterialCreator | undefined;
 
       if (mtlMatch) {
-        const mtlFilename = mtlMatch[1].trim();
+        const mtlFilename = mtlMatch[1]!.trim();
         const mtlUrl = basePath + mtlFilename;
         
         try {
@@ -779,7 +779,7 @@ export class SplatViewer {
     
     // Animate Particles
     if (this.particleSystem && this.particleVelocities) {
-      const positions = this.particleSystem.geometry.attributes.position.array as Float32Array;
+      const positions = this.particleSystem.geometry.attributes.position!.array as Float32Array;
       const count = positions.length / 3;
       const time = performance.now() * 0.001;
       
@@ -791,12 +791,12 @@ export class SplatViewer {
         
         // Circular motion + vertical drift
         // Simple orbit logic:
-        const x = positions[i3];
-        const y = positions[i3 + 1];
-        const z = positions[i3 + 2]; // Z is up in our world
+        const x = positions[i3]!;
+        const y = positions[i3 + 1]!;
+        const z = positions[i3 + 2]!; // Z is up in our world
         
         // Orbit around Z axis
-        const speed = this.particleVelocities[i] * speedScale;
+        const speed = this.particleVelocities![i]! * speedScale;
         const radius = Math.sqrt(x*x + y*y);
         const angle = Math.atan2(y, x) + speed * 0.01;
         
@@ -1441,7 +1441,9 @@ export class SplatViewer {
       targetColor.setHSL(hsl.h, hsl.s, hsl.l);
 
       // Apply tint
-      material.color.copy(targetColor);
+      if ('color' in material) {
+        (material as THREE.MeshStandardMaterial).color.copy(targetColor);
+      }
       
       // Handle emissive
       if ('emissive' in material && original.emissive) {
