@@ -1059,7 +1059,7 @@ export class SplatViewer {
         uTexture: { value: texture },
         uPointSize: { value: 0.3 },
         // Adjust this value to change breathing speed globally (Default: 2.5)
-        uBreathSpeed: { value: 10  }
+        uBreathSpeed: { value: 1  }
       },
       vertexShader: `
         uniform float uTime;

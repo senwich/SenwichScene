@@ -36,7 +36,7 @@ watch(energy, (newEnergy) => {
       </button>
       
       <div class="energy-indicator" title="Focus Energy">
-        <div class="energy-hint">专注在此页面给小马充能。</div>
+        <div class="energy-hint">专注此页面来为小马注入生机。</div>
         <div class="energy-bar">
           <div class="energy-fill" :style="{ width: (energy * 100) + '%' }"></div>
         </div>
