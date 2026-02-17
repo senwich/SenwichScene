@@ -1,4 +1,4 @@
-import { ref, onMounted, onUnmounted, watch } from "vue";
+import { ref, onMounted, onUnmounted } from "vue";
 
 export function usePonyCare() {
   const energy = ref(1.0); // 0.0 to 1.0
