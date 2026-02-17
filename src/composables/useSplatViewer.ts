@@ -38,10 +38,6 @@ export function useSplatViewer() {
     viewer.updateEnergy(energy);
   };
 
-  const setViewMode = (mode: 'quad' | 'single') => {
-    viewer.setViewMode(mode);
-  };
-
   onMounted(() => {
     if (container.value) {
       viewer.mount(container.value);
@@ -62,7 +58,6 @@ export function useSplatViewer() {
     loadTwilightSparkle,
     loadPinkiePie,
     updateEnergy,
-    setViewMode,
   };
 }
 

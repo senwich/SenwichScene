@@ -658,9 +658,9 @@ export class SplatViewer {
     const camera = this.primaryView.camera;
     const offset = new THREE.Vector3().copy(camera.position).sub(this.orbitTarget);
 
-    // 1. Yaw (horizontal) around World Z
+    // 1. Yaw (horizontal) around World Y (vertical axis, turntable-style)
     // Note: dTheta is usually negative for drag-left
-    const quatYaw = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), dTheta);
+    const quatYaw = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), dTheta);
     offset.applyQuaternion(quatYaw);
     camera.up.applyQuaternion(quatYaw);
 
@@ -1269,9 +1269,11 @@ export class SplatViewer {
                  float weight = 1.0 - smoothstep(0.0, 0.4, relH);
                  
                  // Only sway if energy/sway is present
-                 if (weight > 0.01) {
-                   float speed = 5.0;
-                   float amp = uSway * 0.15; 
+                 if (weight > 0.01 && uSway > 0.001) {
+                   // Fixed speed for smooth sine wave (no phase jitter)
+                   float speed = 3.0;
+                   // Amplitude scales with energy
+                   float amp = uSway * 0.3; 
                    
                    // Sway motion
                    float wave = sin(uTime * speed + hVal * 2.0);
@@ -1325,8 +1327,9 @@ export class SplatViewer {
                  // Range: 0.3 (deep shadow) to 1.7 (bright spotlight)
                  float lightIntensity = 0.3 + 1.4 * smoothstep(-0.4, 0.4, cloudNoise);
                  
-                 // Apply to diffuse color (base color)
-                 diffuseColor.rgb *= lightIntensity;
+                 // Apply to diffuse color, scaled by energy
+                 float cloudStrength = uEnergy;
+                 diffuseColor.rgb *= mix(1.0, lightIntensity, cloudStrength);
                `;
                
                shader.fragmentShader = shader.fragmentShader.replace('#include <color_fragment>', cloudLogic);
@@ -1458,10 +1461,10 @@ export class SplatViewer {
       this.model.scale.copy(this.baseScale);
       
       // Height: Drop down
-      // Z is Up. Drop by 0.5 units at 0 energy
-      const zOffset = -0.5 * (1 - energy);
+      // Y is Up. Drop by 0.5 units at 0 energy
+      const yOffset = -0.5 * (1 - energy);
       this.model.position.copy(this.basePosition);
-      this.model.position.z += zOffset;
+      this.model.position.y += yOffset;
     }
     
     // 5. Update Sway

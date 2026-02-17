@@ -1,16 +1,10 @@
 <script setup lang="ts">
-import { ref, watch } from "vue";
+import { watch } from "vue";
 import { useSplatViewer } from "./composables/useSplatViewer";
 import { usePonyCare } from "./composables/usePonyCare";
 
-const { container, fileInput, triggerFileSelect, handleFileSelect, resetView, loadTwilightSparkle, loadPinkiePie, updateEnergy, setViewMode } = useSplatViewer();
+const { container, fileInput, triggerFileSelect, handleFileSelect, resetView, loadTwilightSparkle, loadPinkiePie, updateEnergy } = useSplatViewer();
 const { energy } = usePonyCare();
-
-const isQuadMode = ref(false);
-const toggleViewMode = () => {
-  isQuadMode.value = !isQuadMode.value;
-  setViewMode(isQuadMode.value ? 'quad' : 'single');
-};
 
 // Connect energy system to viewer
 watch(energy, (newEnergy) => {
@@ -37,14 +31,12 @@ watch(energy, (newEnergy) => {
       <button class="pinkie-button" @click="loadPinkiePie">
         PP 🧁
       </button>
-      <button class="mode-button" @click="toggleViewMode">
-        {{ isQuadMode ? '单视图 ⏹️' : '全息 ❖' }}
-      </button>
       <button class="reset-button" @click="resetView()">
         重置
       </button>
       
       <div class="energy-indicator" title="Focus Energy">
+        <div class="energy-hint">专注在此页面给小马充能。</div>
         <div class="energy-bar">
           <div class="energy-fill" :style="{ width: (energy * 100) + '%' }"></div>
         </div>
@@ -133,15 +125,6 @@ watch(energy, (newEnergy) => {
   box-shadow: 0 4px 12px rgba(233, 30, 99, 0.6);
 }
 
-.mode-button {
-  background: rgba(255, 255, 255, 0.15);
-  border: 1px solid rgba(255, 255, 255, 0.2) !important;
-}
-
-.mode-button:hover {
-  background: rgba(255, 255, 255, 0.25);
-  transform: translateX(2px);
-}
 
 .reset-button {
   background: rgba(255, 255, 255, 0.9);
@@ -163,7 +146,16 @@ watch(energy, (newEnergy) => {
 
 .energy-indicator {
   padding: 0 4px;
-  margin-top: 5px;
+  margin-top: 15px;
+}
+
+.energy-hint {
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.45);
+  margin-bottom: 6px;
+  text-align: center;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  letter-spacing: 0.5px;
 }
 
 .energy-bar {

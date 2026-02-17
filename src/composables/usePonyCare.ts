@@ -5,8 +5,8 @@ export function usePonyCare() {
   const isVisible = ref(true);
   
   // Configuration
-  const GROWTH_TIME_SEC = 1 * 60; // 10 minutes to full
-  const DECAY_TIME_SEC = 2*60; // 12 hours to empty
+  const GROWTH_TIME_SEC = 1 * 60; 
+  const DECAY_TIME_SEC = 0.1*60; 
   
   const GROWTH_RATE = 1.0 / GROWTH_TIME_SEC;
   const DECAY_RATE = 1.0 / DECAY_TIME_SEC;
