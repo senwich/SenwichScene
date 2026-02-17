@@ -824,7 +824,8 @@ export class SplatViewer {
     const cameraChanged = this.updateCamera();
     const spinning = this.isSpinning && !this.pointerState.isDragging;
 
-    if (this.needsRender || cameraChanged || spinning) {
+    const hasAnimations = this.currentEnergy > 0.01;
+    if (this.needsRender || cameraChanged || spinning || hasAnimations) {
       this.renderer.clear();
       for (const view of this.views) {
         this.renderView(view);
@@ -832,7 +833,7 @@ export class SplatViewer {
       this.needsRender = false;
     }
 
-    if (!cameraChanged && !this.needsRender && !spinning) {
+    if (!cameraChanged && !this.needsRender && !spinning && this.currentEnergy <= 0.01) {
       this.renderer.setAnimationLoop(null);
       this.renderLoopActive = false;
     }
