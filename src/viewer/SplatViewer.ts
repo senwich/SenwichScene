@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { SplatMesh } from "@sparkjsdev/spark";
 import { OBJLoader } from "three-stdlib";
-import { MTLLoader, MaterialCreator } from "three-stdlib";
+import { MTLLoader } from "three-stdlib";
 import { setOrbitFromVector, setVectorFromOrbit } from "./orbitMath";
 
 type AxisLock = "horizontal" | "vertical" | null;
@@ -364,7 +364,7 @@ export class SplatViewer {
 
       // Check if the OBJ file references an MTL file
       const mtlMatch = objText.match(/^mtllib\s+(.+)$/m);
-      let materials: MaterialCreator | undefined;
+      let materials: ReturnType<MTLLoader['parse']> | undefined;
 
       if (mtlMatch) {
         const mtlFilename = mtlMatch[1]!.trim();
@@ -807,7 +807,7 @@ export class SplatViewer {
         positions[i3 + 2] = z + Math.sin(time + i) * 0.002 * speedScale;
       }
       
-      this.particleSystem.geometry.attributes.position.needsUpdate = true;
+      this.particleSystem.geometry.attributes.position!.needsUpdate = true;
       
       // Request render if particles are visible (energy > 0)
       if (this.currentEnergy > 0.01) {
