@@ -27,11 +27,11 @@ export function useSplatViewer() {
   };
 
   const loadTwilightSparkle = () => {
-    viewer.loadFromUrl('/models/TwilightSparkle/TwilightSparkle.obj');
+    viewer.loadFromUrl(`${import.meta.env.BASE_URL}models/TwilightSparkle/TwilightSparkle.obj`);
   };
 
   const loadPinkiePie = () => {
-    viewer.loadFromUrl('/models/PinkiePie/PinkiePie.obj');
+    viewer.loadFromUrl(`${import.meta.env.BASE_URL}models/PinkiePie/PinkiePie.obj`);
   };
 
   const updateEnergy = (energy: number) => {
