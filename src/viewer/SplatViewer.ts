@@ -1386,23 +1386,55 @@ export class SplatViewer {
                  // ========================
                  // NEW: Eye Animations (Material 2)
                  // ========================
-                 if (uMaterialId > 1.5 && uMaterialId < 2.5) {
-                    // 1. Blinking
-                    // Periodic "close" event
-                    // Time modulo something
-                    float blinkPeriod = 4.0;
-                    // Slightly randomize period with sine to avoid robotic feel (simple mock)
-                    float tBlinkOffset = sin(uTime * 0.1) * 2.0;
-                    float tBlink = mod(uTime + tBlinkOffset, blinkPeriod);
+                 if (uMaterialId > 1.5 && uMaterialId < 2.5 && uEnergy > 0.01) {
+                    // 1. Blinking (Fixed period + probability gating)
+                    // Use a fixed short period; each cycle, decide if a blink happens
+                    // based on energy. Higher energy = more blinks.
+                    float basePeriod = 2.0;
+                    float blinkIndex = floor(uTime / basePeriod);
+                    float tBlink = mod(uTime, basePeriod);
                     
-                    // Blink happens at t=0 to t=0.15
-                    float blinkDuration = 0.15;
-                    float isBlinking = 1.0 - smoothstep(0.0, blinkDuration * 0.5, tBlink) * (1.0 - smoothstep(blinkDuration * 0.5, blinkDuration, tBlink));
+                    // Pseudo-random per cycle: uniform in [0,1)
+                    float blinkRand = fract(sin(blinkIndex * 43758.5453) * 12345.6789);
+                    // Power curve for steeper gradient: P(blink) = energy^3
+                    // energy=0.3 → P≈0.03, energy=0.5 → P≈0.13
+                    // energy=0.8 → P≈0.51, energy=1.0 → P=1.0
+                    float blinkProb = uEnergy * uEnergy * uEnergy; // cubic
+                    bool shouldBlink = blinkRand < blinkProb;
                     
-                    // Invert for "openness": 0 = fully closed, 1 = fully open
-                    // Actually smoothstep returns 0..1..0 bump. 
-                    // We want scale: 1.0 normally, 0.1 when blinking
-                    float blinkScale = 1.0 - (1.0 - isBlinking) * 0.9;
+                    float blinkScale = 1.0;
+                    if (shouldBlink) {
+                       // Randomize blink time within the 2s period
+                       // Use a different seed for offset (blinkIndex + 123.45)
+                       // Offset range: 0.2s to 1.8s (keep away from edges to avoid cycle boundary glitches)
+                       float blinkOffset = 0.2 + fract(sin((blinkIndex + 123.45) * 65432.1) * 98765.4) * 1.6;
+                       
+                       // Blink happens at t=blinkOffset to t=blinkOffset+0.22
+                       float tLocal = tBlink - blinkOffset;
+                       float blinkDuration = 0.15;
+                       
+                       // Asymmetric blink: Fast close (30%), slower open (70%)
+                       // Close phase: 0 -> 1 in first 30% of duration
+                       // Open phase: 1 -> 0 in last 70% of duration
+                       float splitTime = blinkDuration * 0.3;
+                       
+                       float closePhase = smoothstep(0.0, splitTime, tLocal);
+                       float openPhase = 1.0 - smoothstep(splitTime, blinkDuration, tLocal);
+                       
+                       // Combine: ramps up then down
+                       // Note: smoothstep returns 0 outside range, so we need min() or logic to combine
+                       // Simplified: valid over [0, duration]
+                       float isBlinking = 0.0;
+                       if (tLocal >= 0.0 && tLocal <= blinkDuration) {
+                           if (tLocal < splitTime) {
+                               isBlinking = closePhase;
+                           } else {
+                               isBlinking = openPhase;
+                           }
+                       }
+                       
+                       blinkScale = 1.0 - isBlinking * 0.9;
+                    }
                     
                     // Apply scale around Eye Center Y
                     transformed.y = (transformed.y - uEyeCenter.y) * blinkScale + uEyeCenter.y;
@@ -1583,15 +1615,17 @@ export class SplatViewer {
 
                  // Warmth Adjustment
                  // Apply only for Twilight (Type 1) to fix "pale/cold" look
+                 // Scaled by uEnergy so at energy=0 (greyscale) there is no color tint
                  if (abs(uCharacterType - 1.0) < 0.1) {
-                    // 1. Warmer Tone (More Magnesium/Red, less Blue/Green)
-                    // Significantly boost Red, reduce Blue/Green to shift purple to warm magenta-purple
-                    gl_FragColor.rgb *= vec3(1.25, 0.95, 1.15);
+                    // 1. Warmer Tone (More Magenta/Red, less Green)
+                    // Lerp from neutral vec3(1.0) to warm tint based on energy
+                    vec3 warmTint = vec3(1.25, 0.95, 1.15);
+                    gl_FragColor.rgb *= mix(vec3(1.0), warmTint, uEnergy);
 
                     // 2. Deepen Tone
-                    // Apply gamma correction > 1.0 to darken midtones and increase richness
-                    // This fixes the "pale" look
-                    gl_FragColor.rgb = pow(gl_FragColor.rgb, vec3(1.3));
+                    // Gamma correction: lerp from 1.0 (no change) to 1.3 (deep) based on energy
+                    float gamma = mix(1.0, 1.3, uEnergy);
+                    gl_FragColor.rgb = pow(gl_FragColor.rgb, vec3(gamma));
                  }
                  
                  // Brightness/Exposure adjustment
