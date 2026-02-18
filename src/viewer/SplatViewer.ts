@@ -1274,7 +1274,7 @@ export class SplatViewer {
                    // Fixed speed for smooth sine wave (no phase jitter)
                    float speed = 3.0;
                    // Amplitude scales with energy
-                   float amp = uSway * 0.3; 
+                   float amp = uSway * 0.2; 
                    
                    // Sway motion
                    float wave = sin(uTime * speed + hVal * 2.0);
