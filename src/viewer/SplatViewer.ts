@@ -1206,16 +1206,34 @@ export class SplatViewer {
     // Since model.scale applies to the whole group, we need to unscale the bbox
     // or calculate it from geometries directly.
     const bbox = new THREE.Box3();
+    const eyeBbox = new THREE.Box3();
+
     model.traverse((child) => {
       if (child instanceof THREE.Mesh) {
         if (!child.geometry.boundingBox) child.geometry.computeBoundingBox();
         bbox.union(child.geometry.boundingBox!);
+
+        // Find Eye Center (blinn8SG is Eyes)
+        if (child.material.name === 'blinn8SG') {
+           eyeBbox.union(child.geometry.boundingBox!);
+        }
       }
     });
+
+    // Calculate Eye Center (default to model center if not found)
+    const eyeCenter = new THREE.Vector3();
+    if (!eyeBbox.isEmpty()) {
+        eyeBbox.getCenter(eyeCenter);
+    } else {
+        // Fallback: Guess roughly near top of bounding box
+        eyeCenter.set(0, bbox.max.y * 0.8, 0); 
+    }
     
-    const height = bbox.max.y - bbox.min.y;
     const minY = bbox.min.y;
-    console.log("Model Local BBox Y:", minY, "to", bbox.max.y, "Height:", height);
+    console.log("Model Local BBox:", 
+      "X:", bbox.min.x.toFixed(3), "to", bbox.max.x.toFixed(3),
+      "Y:", bbox.min.y.toFixed(3), "to", bbox.max.y.toFixed(3),
+      "Z:", bbox.min.z.toFixed(3), "to", bbox.max.z.toFixed(3));
 
     model.traverse((child) => {
       if (child instanceof THREE.Mesh) {
@@ -1233,22 +1251,30 @@ export class SplatViewer {
                shader.uniforms.uTime = this.globalUniforms.uTime;
                shader.uniforms.uSway = this.globalUniforms.uSway;
                shader.uniforms.uEnergy = this.globalUniforms.uEnergy;
+               shader.uniforms.uCharacterType = this.globalUniforms.uCharacterType;
+               shader.uniforms.uEyeCenter = { value: eyeCenter }; // Injected Eye Center
+               
+               // Per-material ID: 0=body(blinn6SG), 1=hair(blinn7SG), 2=eyes(blinn8SG)
+               const matId = m.name === 'blinn7SG' ? 1.0 : (m.name === 'blinn8SG' ? 2.0 : 0.0);
+               shader.uniforms.uMaterialId = { value: matId };
                
                // Inject Uniforms definition (Vertex)
                // Also add vWorldPositionCustom for Cloud Shadows
-               if (shader.vertexShader.includes('#include <common>')) {
-                  shader.vertexShader = shader.vertexShader.replace('#include <common>', `
+               const headerUniforms = `
                     #include <common>
                     uniform float uTime;
                     uniform float uSway;
+                    uniform float uEnergy;
+                    uniform float uCharacterType;
+                    uniform float uMaterialId;
+                    uniform vec3 uEyeCenter;
                     varying vec3 vWorldPositionCustom;
-                  `);
+               `;
+
+               if (shader.vertexShader.includes('#include <common>')) {
+                  shader.vertexShader = shader.vertexShader.replace('#include <common>', headerUniforms);
                } else {
-                  shader.vertexShader = `
-                    uniform float uTime;
-                    uniform float uSway;
-                    varying vec3 vWorldPositionCustom;
-                  ` + shader.vertexShader;
+                  shader.vertexShader = headerUniforms + shader.vertexShader;
                }
 
                // Inject motion logic (and calculate world pos)
@@ -1266,7 +1292,7 @@ export class SplatViewer {
                  
                  float relH = (hVal - minH) / totalH;
                  
-                 // Weight: 1.0 at bottom, 0.0 at top (bottom 40%)
+                 // 1. Leg Sway (Bottom 40%)
                  float weight = 1.0 - smoothstep(0.0, 0.4, relH);
                  
                  // Only sway if energy/sway is present
@@ -1283,7 +1309,199 @@ export class SplatViewer {
                    transformed.x += wave * weight * amp;
                    transformed.z += waveZ * weight * amp * 0.5;
                  }
+
+                 // 2. Wing Flapping (Twilight Sparkle Only)
+                 // Using absolute model coordinates (bbox X:-2.83~2.83, Y:-4~3.57, Z:-4.56~3.39)
+                 // Wings: on upper back, extending sideways
+                 //   Y: shoulder height, roughly Y=0 to Y=2 (relH ~0.53 to 0.79)
+                 //   X: outside body core, |x| > 1.0 (body is ~±1.0 wide)
+                 //   Z: mid-back area, roughly Z=-2 to Z=1
+                 float wingHeightMask = smoothstep(-0.5, 0.0, hVal) * (1.0 - smoothstep(1.5, 2.5, hVal));
+                 float absX = abs(position.x);
+                 float wingWidthMask = smoothstep(0.8, 1.2, absX);
                  
+                 // Z constraint: wings on the back, mid-body
+                 float wingDepthMask = smoothstep(-2.5, -1.5, position.z) * (1.0 - smoothstep(0.5, 1.5, position.z));
+                 
+                 float wingMask = wingHeightMask * wingWidthMask * wingDepthMask;
+
+                 if (uCharacterType > 0.5 && uCharacterType < 1.5 && wingMask > 0.01 && uSway > 0.001) {
+                    // Wave-like undulation (like a goose/crane)
+                    // Phase propagates from shoulder outward → traveling wave
+                    float shoulderX = 1.0;
+                    float distFromShoulder = max(absX - shoulderX, 0.0);
+                    
+                    float flapSpeed = 3.0;
+                    float flapAmp = uSway * 0.3;
+                    
+                    // Traveling wave: phase shifts with distance from shoulder
+                    // Creates a bending/ripple effect along the wing span
+                    float wavePhase = uTime * flapSpeed - distFromShoulder * 2.0;
+                    
+                    // Amplitude increases toward wingtip (further from shoulder = more movement)
+                    float tipFactor = distFromShoulder;
+                    
+                    // Y displacement (up/down flap with wave bending)
+                    transformed.y += sin(wavePhase) * tipFactor * flapAmp * wingMask;
+                    
+                    // Slight X spread at flap peaks (wing extends outward when lifting)
+                    float dir = sign(position.x);
+                    transformed.x += dir * sin(wavePhase) * tipFactor * flapAmp * 0.15 * wingMask;
+                 }
+
+                 // ========================
+                 // NEW: Body Breathing (Material 0)
+                 // ========================
+                 if (uMaterialId < 0.5) {
+                    // Chest Area Definition
+                    // Height: ~1.5 to 3.0 (Upper body)
+                    float chestH = smoothstep(1.0, 2.0, hVal) * (1.0 - smoothstep(3.0, 3.5, hVal));
+                    // Depth: Front facing (Z > 0.5) to avoid inflating back
+                    float chestZ = smoothstep(0.0, 1.0, position.z);
+                    
+                    // Horn Exclusion: top center of head (Y > 2.5, |X| < 0.5)
+                    // Prevents the horn from pulsating with breathing
+                    float hornBreathExcl = 1.0;
+                    if (hVal > 2.0 && absX < 0.5) {
+                       hornBreathExcl = 1.0 - smoothstep(2.0, 2.8, hVal) * (1.0 - smoothstep(0.0, 0.5, absX));
+                    }
+                    
+                    float chestMask = chestH * chestZ * hornBreathExcl;
+                    
+                    if (chestMask > 0.01) {
+                       float breathSpeed = 1.5; // Starts slow
+                       // Deep breath every few seconds
+                       float breathCycle = sin(uTime * breathSpeed);
+                       // Map -1..1 to 0..1 expansion
+                       float breath = (breathCycle + 1.0) * 0.5; 
+                       
+                       // Scale with energy: Higher energy = faster, deeper breaths
+                       float breathAmp = 0.05 + uEnergy * 0.1; 
+                       
+                       // Expand along normal (mostly forward/outward)
+                       transformed += objectNormal * breath * breathAmp * chestMask;
+                    }
+                 }
+
+                 // ========================
+                 // NEW: Eye Animations (Material 2)
+                 // ========================
+                 if (uMaterialId > 1.5 && uMaterialId < 2.5) {
+                    // 1. Blinking
+                    // Periodic "close" event
+                    // Time modulo something
+                    float blinkPeriod = 4.0;
+                    // Slightly randomize period with sine to avoid robotic feel (simple mock)
+                    float tBlinkOffset = sin(uTime * 0.1) * 2.0;
+                    float tBlink = mod(uTime + tBlinkOffset, blinkPeriod);
+                    
+                    // Blink happens at t=0 to t=0.15
+                    float blinkDuration = 0.15;
+                    float isBlinking = 1.0 - smoothstep(0.0, blinkDuration * 0.5, tBlink) * (1.0 - smoothstep(blinkDuration * 0.5, blinkDuration, tBlink));
+                    
+                    // Invert for "openness": 0 = fully closed, 1 = fully open
+                    // Actually smoothstep returns 0..1..0 bump. 
+                    // We want scale: 1.0 normally, 0.1 when blinking
+                    float blinkScale = 1.0 - (1.0 - isBlinking) * 0.9;
+                    
+                    // Apply scale around Eye Center Y
+                    transformed.y = (transformed.y - uEyeCenter.y) * blinkScale + uEyeCenter.y;
+
+                    // 2. Saccades (Looking Around)
+                    // Quantize time to create jerky "steps"
+                    float lookTime = floor(uTime * 1.5); // Change gaze every ~0.6s
+                    
+                    // Deterministic random per step
+                    float rndX = fract(sin(lookTime * 12.9898) * 43758.5453);
+                    float rndY = fract(sin(lookTime * 78.233) * 43758.5453);
+                    
+                    // Map to range [-1, 1]
+                    float lookX = (rndX - 0.5) * 2.0;
+                    float lookY = (rndY - 0.5) * 2.0;
+                    
+                    // Apply tiny translation offset
+                    float lookAmp = 0.05 * (uEnergy + 0.5); // Look more when energetic
+                    transformed.x += lookX * lookAmp;
+                    transformed.y += lookY * lookAmp * 0.5; // Less vertical movement
+                 }
+
+                 // 3. Ear Flap (Both Ponies, Body Material Only)
+                 // Ears: very top of head, slightly off-center, body material only
+                 // Use normalized coordinates so it works for all model sizes
+                 if (uMaterialId < 0.5 && uSway > 0.001) {
+                    float modelHalfWidth = ${Math.max(Math.abs(bbox.min.x), Math.abs(bbox.max.x)).toFixed(2)};
+                    float relAbsX = absX / max(modelHalfWidth, 0.01);
+                    
+                    float earHeightMask = smoothstep(0.60, 0.80, relH);
+                    float earWidthMask = smoothstep(0.12, 0.22, relAbsX) * (1.0 - smoothstep(0.55, 0.65, relAbsX));
+                    float earMask = earHeightMask * earWidthMask;
+                    
+                    if (earMask > 0.01) {
+                       // Wing-like wave from ear base upward to tip
+                       float distFromBase = max(relH - 0.92, 0.0) * totalH;
+                       float earSpeed = 3.0;
+                       float earAmp = uSway * 0.08;
+                       
+                       // Traveling wave from base to tip
+                       float earPhase = uTime * earSpeed - distFromBase * 3.0;
+                       transformed.x += sign(position.x) * sin(earPhase) * distFromBase * earAmp * earMask;
+                       transformed.y += sin(earPhase) * distFromBase * earAmp * 0.3 * earMask;
+                    }
+                 }
+
+                 // 4. Mane/Hair Flow (Both Ponies, Hair Material Only)
+                 // Only apply to hair mesh (blinn7SG, uMaterialId == 1.0)
+                 if (uMaterialId > 0.5 && uMaterialId < 1.5 && uSway > 0.001) {
+                    // Crown point (top of head) - wave radiates outward from here
+                    vec3 crownPos = vec3(0.0, 3.0, 0.0);
+                    float distFromCrown = length(position.xyz - crownPos);
+                    
+                    // Horn exclusion: very top center (Y>2.5, |x|<0.4)
+                    float hornExclusion = 1.0;
+                    if (hVal > 2.5 && absX < 0.4) {
+                       hornExclusion = 1.0 - smoothstep(2.5, 3.0, hVal) * (1.0 - smoothstep(0.0, 0.4, absX));
+                    }
+                    
+                    // Face exclusion: front of head at face height (suppress hair near face)
+                    // Face is roughly Y=1.5~3.0, Z>0 (front), |x|<0.8
+                    float faceExclusion = 1.0;
+                    if (hVal > 1.5 && hVal < 3.0 && absX < 0.8 && distFromCrown < 2.0) {
+                       faceExclusion = smoothstep(1.5, 3.0, distFromCrown);
+                    }
+                    
+                    float maneSpeed = 3.0;
+                    float maneAmp = uSway * 0.06;
+                    
+                    // Radial wave from crown outward (no harmonics)
+                    float maneWave = sin(uTime * maneSpeed - distFromCrown * 1.5);
+                    
+                    // Amplitude increases with distance from crown (tips move more)
+                    float tipWeight = smoothstep(0.0, 2.0, distFromCrown);
+                    
+                    float mask = tipWeight * hornExclusion * faceExclusion;
+                    transformed.x += maneWave * maneAmp * mask;
+                    transformed.z += cos(uTime * maneSpeed * 0.8 - distFromCrown * 1.0) * maneAmp * 0.5 * mask;
+                 }
+
+                 // 5. Tail Wag (Both Ponies, Hair Material Only)
+                 // Tail: at Z extremes (rear of model), mid-to-low height
+                 if (uMaterialId > 0.5 && uMaterialId < 1.5 && uSway > 0.001) {
+                    float tailDepthMask = max(
+                      smoothstep(-2.5, -3.5, position.z),
+                      smoothstep(1.5, 2.5, position.z)
+                    );
+                    float tailHeightMask2 = smoothstep(-3.0, -1.5, hVal) * (1.0 - smoothstep(1.5, 2.5, hVal));
+                    float tailMask = tailDepthMask * tailHeightMask2;
+                    
+                    if (tailMask > 0.01) {
+                       float tailSpeed = 3.0;
+                       float tailAmp = uSway * 0.12;
+                       // Side-to-side wagging (no harmonics)
+                       transformed.x += sin(uTime * tailSpeed) * tailAmp * tailMask;
+                       transformed.y += cos(uTime * tailSpeed * 0.8) * tailAmp * 0.3 * tailMask;
+                    }
+                 }
+
                  // Calculate World Position for Cloud Shadows
                  vWorldPositionCustom = (modelMatrix * vec4(transformed, 1.0)).xyz;
                `;
@@ -1294,6 +1512,7 @@ export class SplatViewer {
                const fragUniforms = `
                  uniform float uEnergy;
                  uniform float uTime;
+                 uniform float uCharacterType;
                  varying vec3 vWorldPositionCustom;
                `;
                
@@ -1361,6 +1580,19 @@ export class SplatViewer {
                  // But for "Pure" look, we just apply the mix.
                  
                  gl_FragColor.rgb = mixedColor;
+
+                 // Warmth Adjustment
+                 // Apply only for Twilight (Type 1) to fix "pale/cold" look
+                 if (abs(uCharacterType - 1.0) < 0.1) {
+                    // 1. Warmer Tone (More Magnesium/Red, less Blue/Green)
+                    // Significantly boost Red, reduce Blue/Green to shift purple to warm magenta-purple
+                    gl_FragColor.rgb *= vec3(1.25, 0.95, 1.15);
+
+                    // 2. Deepen Tone
+                    // Apply gamma correction > 1.0 to darken midtones and increase richness
+                    // This fixes the "pale" look
+                    gl_FragColor.rgb = pow(gl_FragColor.rgb, vec3(1.3));
+                 }
                  
                  // Brightness/Exposure adjustment
                  // 0.0 energy -> 0.3 brightness (Dim)
@@ -1410,15 +1642,13 @@ export class SplatViewer {
     this.directionalLight2.intensity = 0.1 + energy * 0.6;
     this.directionalLight3.intensity = 0.1 + energy * 0.4;
 
-    // 2. Update Particles
-    if (this.particleSystem) {
-      if (this.currentCharacter === 'twilight') {
-        this.globalUniforms.uCharacterType.value = 1.0;
-      } else if (this.currentCharacter === 'pinkie') {
-        this.globalUniforms.uCharacterType.value = 2.0;
-      } else {
-        this.globalUniforms.uCharacterType.value = 0.0;
-      }
+    // 2. Update Character Type Uniform (for Shader Logic: Wings, Particles)
+    if (this.currentCharacter === 'twilight') {
+      this.globalUniforms.uCharacterType.value = 1.0;
+    } else if (this.currentCharacter === 'pinkie') {
+      this.globalUniforms.uCharacterType.value = 2.0;
+    } else {
+      this.globalUniforms.uCharacterType.value = 0.0;
     }
 
     // 3. Update Model Colors (Tint only, Greyscale/Saturation handled by Shader)
