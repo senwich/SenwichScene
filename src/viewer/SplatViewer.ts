@@ -96,6 +96,7 @@ export class SplatViewer {
   private defaultDistance = 4;
   private needsRender = true;
   private renderLoopActive = false;
+  private warmupFrames = 0; // keep render loop alive for N frames after model load
 
   private readonly rotateSpeed = 0.003;
   private readonly dampingFactor = 0.15;
@@ -322,12 +323,19 @@ export class SplatViewer {
       newModel.quaternion.set(0, 0, 0, 1);
       newModel.position.set(0, 0, 0);
       
-      // Scale appropriately - OBJ files often use centimeters
+      // Always normalize model to a consistent size
       const bbox = new THREE.Box3().setFromObject(newModel);
+      const center = bbox.getCenter(new THREE.Vector3());
       const size = bbox.getSize(new THREE.Vector3());
       const maxDim = Math.max(size.x, size.y, size.z);
-      if (maxDim > 10) {
-        const scale = 10 / maxDim;
+
+      // Center the model at origin
+      newModel.position.sub(center);
+
+      // Scale to a target size of 5 units
+      const targetSize = 5;
+      if (maxDim > 0.001) {
+        const scale = targetSize / maxDim;
         newModel.scale.set(scale, scale, scale);
       }
       
@@ -338,6 +346,9 @@ export class SplatViewer {
       
       if (this.model === newModel && loadToken === this.currentLoadToken) {
         this.fitViewToModel(newModel);
+        this.warmupFrames = 30;
+        this.forceRenderNow(); // immediate draw — don't wait for rAF
+        this.requestRender();
       }
     } catch (error) {
       console.error("Error loading OBJ file:", error);
@@ -428,12 +439,19 @@ export class SplatViewer {
       newModel.quaternion.set(0, 0, 0, 1);
       newModel.position.set(0, 0, 0);
       
-      // Scale appropriately - OBJ files often use centimeters
+      // Always normalize model to a consistent size
       const bbox = new THREE.Box3().setFromObject(newModel);
+      const center = bbox.getCenter(new THREE.Vector3());
       const size = bbox.getSize(new THREE.Vector3());
       const maxDim = Math.max(size.x, size.y, size.z);
-      if (maxDim > 10) {
-        const scale = 10 / maxDim;
+
+      // Center the model at origin
+      newModel.position.sub(center);
+
+      // Scale to a target size of 5 units
+      const targetSize = 5;
+      if (maxDim > 0.001) {
+        const scale = targetSize / maxDim;
         newModel.scale.set(scale, scale, scale);
       }
       
@@ -444,6 +462,9 @@ export class SplatViewer {
       
       if (this.model === newModel && loadToken === this.currentLoadToken) {
         this.fitViewToModel(newModel);
+        this.warmupFrames = 30;
+        this.forceRenderNow(); // immediate draw — don't wait for rAF
+        this.requestRender();
       }
     } catch (error) {
       console.error("Error loading OBJ file with MTL:", error);
@@ -746,6 +767,15 @@ export class SplatViewer {
     }
   }
 
+  /** Immediate synchronous render — bypasses rAF scheduling */
+  private forceRenderNow() {
+    this.syncRendererSize();
+    this.renderer.clear();
+    for (const view of this.views) {
+      this.renderView(view);
+    }
+  }
+
   private renderLoop = () => {
     // Update Uniforms
     // Use performance.now() instead of Date.now() for GPU float precision.
@@ -825,7 +855,10 @@ export class SplatViewer {
     const spinning = this.isSpinning && !this.pointerState.isDragging;
 
     const hasAnimations = this.currentEnergy > 0.01;
-    if (this.needsRender || cameraChanged || spinning || hasAnimations) {
+    const warming = this.warmupFrames > 0;
+    if (warming) this.warmupFrames--;
+
+    if (this.needsRender || cameraChanged || spinning || hasAnimations || warming) {
       this.renderer.clear();
       for (const view of this.views) {
         this.renderView(view);
@@ -833,7 +866,7 @@ export class SplatViewer {
       this.needsRender = false;
     }
 
-    if (!cameraChanged && !this.needsRender && !spinning && this.currentEnergy <= 0.01) {
+    if (!cameraChanged && !this.needsRender && !spinning && this.currentEnergy <= 0.01 && !warming) {
       this.renderer.setAnimationLoop(null);
       this.renderLoopActive = false;
     }
