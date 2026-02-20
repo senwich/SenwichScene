@@ -71,7 +71,7 @@ onUnmounted(() => {
     <!-- Always-visible labels at top-left -->
     <div class="top-left-labels">
       <div class="energy-indicator" title="Focus Energy">
-        <div class="energy-hint">投喂专注力可以让小马保持生机</div>
+        <div class="energy-hint">不要离开，也许有魔法能让小马重获生机...</div>
         <div class="energy-bar">
           <div class="energy-fill" :style="{ width: (energy * 100) + '%' }"></div>
         </div>
